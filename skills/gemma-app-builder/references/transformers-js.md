@@ -24,7 +24,7 @@ Run Transformers directly in the browser using JavaScript.
         const progressBar = new cliProgress.SingleBar({}, cliProgress.Presets.shades_classic);
         progressBar.start(100, 0);
 
-        generator = await pipeline('text-generation', 'onnx-community/gemma-3-270m-it-ONNX', {
+        generator = await pipeline('text-generation', 'onnx-community/gemma-4-E2B-it-ONNX', {
             device: 'webgpu',
             dtype: 'q4',
             progress_callback: (progress) => {
