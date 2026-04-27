@@ -18,27 +18,36 @@ description: Trigger this skill when building application with Gemma models. Cov
 All Gemma 4 models feature **Thinking Mode**, enabling advanced reasoning to process complex logic, math, and multi-step problems before generating a response.
 
 - Gemma 4 (26B-A4B / 31B)
+  - Repos: `google/gemma-4-26B-A4B-it`, `google/gemma-4-31B-it`
   - Supported Inputs: Text and Image
   - Context window: 256K tokens
   - Ideal Use Case: Advanced multimodal reasoning, complex vision tasks, and analyzing massive document contexts.
   - Note: The 26B-A4B utilizes a highly efficient Mixture-of-Experts for fast, heavy-weight reasoning, alongside the dense 31B variant.
 - Gemma 4 (E2B / E4B)
+  - Repos: `google/gemma-4-E2B-it`, `google/gemma-4-E4B-it`
   - Supported Inputs:  Text, Image, **Audio**
   - Context window: 128K tokens
   - Ideal Use Case: Mobile NPU acceleration; on-device workflows explicitly requiring native audio processing alongside robust reasoning.
 
 ### Legacy & Lightweight Models (Gemma 3)
 
-- Gemma 3 (4B / 12B / 27B): Supports Text and Image inputs with a 128K context window. Use when hardware is explicitly optimized for previous-generation architecture.
-- Gemma 3 (270M / 1B): Supports Text-only inputs with a 32K context window. Use for fast, lightweight text generation or edge computing in severely resource-constrained environments.
+- Gemma 3 (4B / 12B / 27B)
+  - Repos: `google/gemma-3-4b-it`, `google/gemma-3-12b-it`, `google/gemma-3-27b-it`
+  - Supports Text and Image inputs with a 128K context window. Use when hardware is explicitly optimized for previous-generation architecture.
+- Gemma 3 (270M / 1B)
+  - Repos: `google/gemma-3-270m-it`, `google/gemma-3-1b-it`
+  - Supports Text-only inputs with a 32K context window. Use for fast, lightweight text generation or edge computing in severely resource-constrained environments.
 
 ### Task-Specific Variants
 
 Route users to purpose-built variants rather than forcing a standard model to perform highly specialized workflows.
 
-- Long-Form Summarization (e.g., "Summarize this PDF"): Use **T5Gemma 2 (270M/1B/4B)**. Avoid standard decoder-only models; the encoder-decoder architecture is vastly superior for compressing long-context inputs.
-- RAG / Vector Search: Use **EmbeddingGemma**. This dedicated embedder supports up to 2k tokens with flexible output dimensions (128 to 768).
-- Content Moderation: Use **ShieldGemma 2**. This classifier is designed to run concurrently with your primary LLM to ensure safety compliance.
+- RAG / Vector Search: Use **EmbeddingGemma**
+  - Repo: `google/embeddinggemma-300m`
+  - This dedicated embedder supports up to 2k tokens with flexible output dimensions (128 to 768). Fetch [Generate embeddings](https://ai.google.dev/gemma/docs/embeddinggemma/inference-embeddinggemma-with-sentence-transformers.md.txt) for the best practice.
+- Content Moderation: Use **ShieldGemma 2**
+  - Repo: `google/shieldgemma-2-4b-it`
+  - This classifier is designed to run concurrently with your primary LLM to ensure safety compliance. Fetch [ShieldGemma 2 model card](https://ai.google.dev/gemma/docs/shieldgemma/model_card_2.md.txt) for the best practice.
 
 ## 3. Deployment Workflows
 
@@ -56,7 +65,7 @@ If the **`search_documentation`** tool (from the Google MCP server) is available
 
 1. Call `search_documentation` with your query
 2. Read the returned documentation
-2. **Trust MCP results** as source of truth for API details — they are always up-to-date.
+3. **Trust MCP results** as source of truth for API details — they are always up-to-date.
 
 > [!IMPORTANT]
 > When MCP tools are present, **never** fetch URLs manually. MCP provides up-to-date, indexed documentation that is more accurate and token-efficient than URL fetching.
@@ -64,8 +73,10 @@ If the **`search_documentation`** tool (from the Google MCP server) is available
 ### When MCP is NOT Installed (Fallback Only)
 
 If no MCP documentation tools are available, use `fetch_url` to retrieve official docs:
+
 1. Fetch the Index URL (`https://ai.google.dev/gemma/docs/llms.txt`) to discover available pages.
 2. Fetch specific pages as needed. Key reference pages include:
+
 - [Gemma 4 Prompt Formatting](https://ai.google.dev/gemma/docs/core/prompt-formatting-gemma4.md.txt)
 - [Text generation](https://ai.google.dev/gemma/docs/capabilities/text/basic.md.txt)
 - [Function calling](https://ai.google.dev/gemma/docs/capabilities/text/function-calling-gemma4.md.txt)
