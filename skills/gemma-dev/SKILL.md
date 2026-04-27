@@ -17,12 +17,12 @@ description: Trigger this skill when building application with Gemma models. Cov
 
 All Gemma 4 models feature **Thinking Mode**, enabling advanced reasoning to process complex logic, math, and multi-step problems before generating a response.
 
-- Gemma 4 (26B-A4B / 31B)
+- Gemma 4 (26B A4B / 31B)
   - Repos: `google/gemma-4-26B-A4B-it`, `google/gemma-4-31B-it`
   - Supported Inputs: Text and Image
   - Context window: 256K tokens
   - Ideal Use Case: Advanced multimodal reasoning, complex vision tasks, and analyzing massive document contexts.
-  - Note: The 26B-A4B utilizes a highly efficient Mixture-of-Experts for fast, heavy-weight reasoning, alongside the dense 31B variant.
+  - Note: The 26B A4B utilizes a highly efficient Mixture-of-Experts for fast, heavy-weight reasoning, alongside the dense 31B variant.
 - Gemma 4 (E2B / E4B)
   - Repos: `google/gemma-4-E2B-it`, `google/gemma-4-E4B-it`
   - Supported Inputs:  Text, Image, **Audio**
