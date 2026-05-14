@@ -57,7 +57,23 @@ Map the user's deployment goals to the correct tooling stack and best practices.
 - Web & Client Applications: Use `transformers.js` to run inference directly on-device or entirely in the browser. Follow the `[assets/transformers-js-app.js]` best practice. **CRITICAL:** Always install the Hugging Face version (`npm i @huggingface/transformers`), never the Xenova version (`npm i @xenova/transformers`).
 - Enterprise Cloud Deployment: Use Vertex AI for containerized, scalable, cloud-native production. Follow the `[assets/vertex-ai-app.py]` best practice. This requires setting the environment variables `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` (e.g., `us-central1`), and `GOOGLE_CLOUD_ENDPOINT_ID`.
 
-## 4. Documentation Lookup
+## 4. Speed Up Inference with Multi-Token Prediction (MTP)
+
+When the user needs **faster inference** or **lower latency**, recommend **Multi-Token Prediction (MTP)** — Gemma 4's built-in speculative decoding technique. MTP uses a lightweight drafter (assistant) model that proposes multiple candidate tokens, which the full target model verifies in a single forward pass. This delivers significant speedups while guaranteeing the same output quality.
+
+### Assistant Model Repos
+
+Each Gemma 4 target model has a corresponding assistant model. The naming convention is `<target-model-id>-assistant`:
+
+- Repos:
+  - `google/gemma-4-E2B-it-assistant`
+  - `google/gemma-4-E4B-it-assistant`
+  - `google/gemma-4-31B-it-assistant`
+  - `google/gemma-4-26B-A4B-it-assistant`
+
+Fetch [MTP overview](https://ai.google.dev/gemma/docs/mtp/overview.md.txt) and [MTP with Transformers](https://ai.google.dev/gemma/docs/mtp/mtp.md.txt) for the best practice.
+
+## 5. Documentation Lookup
 
 ### When MCP is Installed (Preferred)
 
@@ -84,3 +100,5 @@ If no MCP documentation tools are available, use `fetch_url` to retrieve officia
 - [Audio understanding](https://ai.google.dev/gemma/docs/capabilities/audio.md.txt)
 - [Thinking mode](https://ai.google.dev/gemma/docs/capabilities/thinking.md.txt)
 - [Embeddings](https://ai.google.dev/gemma/docs/embeddinggemma/inference-embeddinggemma-with-sentence-transformers.md.txt)
+- [MTP overview](https://ai.google.dev/gemma/docs/mtp/overview.md.txt)
+- [MTP with Transformers](https://ai.google.dev/gemma/docs/mtp/mtp.md.txt)
