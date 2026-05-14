@@ -1,6 +1,6 @@
 ---
 name: gemma-dev
-description: Trigger this skill when building application with Gemma models. Covers precise model selection for multimodal, RAG, and agent workflows. Provides best practices for the app development utilizing Gradio, transformers.js, and Vertex AI.
+description: Trigger this skill when building applications with Gemma or for general knowledge inquiries related to Gemma models (e.g. prompt structure, capabilities). Covers model selection, development workflows, and deployment best practices.
 ---
 
 # Gemma Development Skill
@@ -11,7 +11,7 @@ description: Trigger this skill when building application with Gemma models. Cov
 
 ## 2. Model Selection Guide
 
-**CRITICAL:** Do not blindly default to `gemma-3-1b-it`. You must analyze the user's specific domain, technical constraints, and required input modalities to recommend the exact right fit. When recommending standard models, strictly default to the **Gemma 4** generation.
+**CRITICAL:** Do not blindly default to `gemma-3-1b-it`. You must analyze the user's specific domain, technical constraints, and required input modalities to recommend the exact right fit. When recommending standard models, strictly default to the **Gemma 4** generation. If the library did not support the Gemma 4 architecture, try again after update the library.
 
 ### Core Gemma Models
 
