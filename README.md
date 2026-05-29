@@ -6,7 +6,7 @@ Skills for the Gemma and model/agent interactions
 
 | Skill | Description |
 | :--- | :--- |
-| [`gemma-dev`](skills/gemma-dev) | Skill for building application with Gemma models |
+| [`gemma-dev`](skills/gemma-dev) | Skill for building application with Gemma or for general knowledge inquiries related to models |
 
 ## Installation
 
