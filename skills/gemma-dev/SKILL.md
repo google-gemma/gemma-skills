@@ -23,7 +23,7 @@ All Gemma 4 models feature **Thinking Mode**, enabling advanced reasoning to pro
   - Context window: 256K tokens
   - Ideal Use Case: Advanced multimodal reasoning, complex vision tasks, and analyzing massive document contexts.
   - Note: The 26B A4B utilizes a highly efficient Mixture-of-Experts for fast, heavy-weight reasoning, alongside the dense 31B variant.
-- Gemma 4 (12B
+- Gemma 4 (12B)
   - Repos: `google/gemma-4-12B-it`
   - Supported Inputs: Text, Image, **Audio**
   - Context window: 256K tokens
