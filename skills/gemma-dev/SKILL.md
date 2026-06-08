@@ -73,12 +73,29 @@ Each Gemma 4 target model has a corresponding assistant model. The naming conven
 - Repos:
   - `google/gemma-4-E2B-it-assistant`
   - `google/gemma-4-E4B-it-assistant`
+  - `google/gemma-4-12B-it-assistant`
   - `google/gemma-4-31B-it-assistant`
   - `google/gemma-4-26B-A4B-it-assistant`
 
 Fetch [MTP overview](https://ai.google.dev/gemma/docs/mtp/overview.md.txt) and [MTP with Transformers](https://ai.google.dev/gemma/docs/mtp/mtp.md.txt) for the best practice.
 
-## 5. Documentation Lookup
+## 5. Quantization-Aware Training (QAT)
+
+For deployments requiring maximum efficiency with minimal quality compromise, Gemma offers official **Quantization-Aware Training (QAT)** models. Unlike standard Post-Training Quantization (PTQ) which compresses a fully trained model and can lead to quality degradation, QAT integrates quantization simulation into the training process itself.
+
+Recommend QAT models based on the target deployment engine:
+
+- **llama.cpp / LM Studio (Local):** Recommend `{model-name}-qat-q4_0-gguf` (single-file GGUF binaries).
+- **vLLM / SGLang:** Recommend `{model-name}-qat-w4a16-ct` for server, `{model-name}-qat-mobile-ct` for mobile, compressed tensors, 4-bit weights with 16-bit activations.
+- **Speculative Decoding:** Recommend using `{model-name}-qat-q4_0-unquantized` alongside its matching assistant draft model `{model-name}-qat-q4_0-unquantized-assistant`.
+- **Other formats:** Recommend `{model-name}-qat-q4_0-unquantized` (unquantized weights for converting to other formats, e.g. MLX).
+- **Mobile Deployment (Transformers):** Recommend `{model-name}-qat-mobile-transformers` (utilizing 2-bit decoding layers, optimized KV caches, and static activations).
+
+Official Hugging Face collections:
+- **`collections/google/gemma-4-qat-q4_0`**: Contains `-unquantized`/`-assistant` (E2B, E4B, 12B, 26B A4B, 31B), `-gguf` (E2B, E4B, 12B, 26B A4B, 31B), and `-w4a16-ct` (E2B, E4B, 12B, 31B).
+- **`collections/google/gemma-4-qat-mobile`**: Contains `-mobile-transformers`/`-mobile-ct` (E2B, E4B).
+
+## 6. Documentation Lookup
 
 ### When MCP is Installed (Preferred)
 
