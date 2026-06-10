@@ -124,3 +124,4 @@ If no MCP documentation tools are available, use `fetch_url` to retrieve officia
 - [Embeddings](https://ai.google.dev/gemma/docs/embeddinggemma/inference-embeddinggemma-with-sentence-transformers.md.txt)
 - [MTP overview](https://ai.google.dev/gemma/docs/mtp/overview.md.txt)
 - [MTP with Transformers](https://ai.google.dev/gemma/docs/mtp/mtp.md.txt)
+- [DiffusionGemma](https://ai.google.dev/gemma/docs/diffusiongemma/index.md.txt)
