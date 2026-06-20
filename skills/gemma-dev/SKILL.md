@@ -54,6 +54,7 @@ Route users to purpose-built variants rather than forcing a standard model to pe
   - Repo: `google/shieldgemma-2-4b-it`
   - This classifier is designed to run concurrently with your primary LLM to ensure safety compliance. Fetch [ShieldGemma 2 model card](https://ai.google.dev/gemma/docs/shieldgemma/model_card_2.md.txt) for the best practice.
 
+
 ## 3. Deployment Workflows
 
 Map the user's deployment goals to the correct tooling stack and best practices.
@@ -61,7 +62,10 @@ Map the user's deployment goals to the correct tooling stack and best practices.
 - Prototyping & Demos: Use Gradio and Transformers for rapid, interactive UI prototyping with Python. Follow the `[assets/gradio-app.py]` best practice.
 - Web & Client Applications: Use `transformers.js` to run inference directly on-device or entirely in the browser. Follow the `[assets/transformers-js-app.js]` best practice. **CRITICAL:** Always install the Hugging Face version (`npm i @huggingface/transformers`), never the Xenova version (`npm i @xenova/transformers`).
 - Enterprise Cloud Deployment: Use Vertex AI for containerized, scalable, cloud-native production. Follow the `[assets/vertex-ai-app.py]` best practice. This requires setting the environment variables `GOOGLE_CLOUD_PROJECT`, `GOOGLE_CLOUD_LOCATION` (e.g., `us-central1`), and `GOOGLE_CLOUD_ENDPOINT_ID`.
-
+- Apple Silicon (MLX): Recommend MLX when the user is on Mac Apple Silicon hardware. These configurations are optimized primarily for **Text** workflows.
+    - Easy Path: Use [Ollama](https://ollama.com/library/gemma4/tags) with model tags like `gemma4:26b` or `gemma4:31b`.
+    - Advanced Path: Use the `mlx-lm` package (`pip install mlx-lm`) for direct control, custom quantization, and fine-tuning (LoRA/QLoRA) via `mlx_lm.lora`.
+    - For more details, follow the [MLX integration guide](https://ai.google.dev/gemma/docs/integrations/mlx).
 ## 4. Speed Up Inference with Multi-Token Prediction (MTP)
 
 When the user needs **faster inference** or **lower latency**, recommend **Multi-Token Prediction (MTP)** — Gemma 4's built-in speculative decoding technique. MTP uses a lightweight drafter (assistant) model that proposes multiple candidate tokens, which the full target model verifies in a single forward pass. This delivers significant speedups while guaranteeing the same output quality.
