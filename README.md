@@ -7,6 +7,7 @@ Skills for the Gemma and model/agent interactions
 | Skill | Description |
 | :--- | :--- |
 | [`gemma-dev`](skills/gemma-dev) | Skill for building application with Gemma or for general knowledge inquiries related to Gemma models |
+| [`gemma-trainer`](skills/gemma-trainer) | Skill for training, fine-tuning, or adapt Gemma models (e.g. SFT, DPO. RLHF, Reward Modeling) on local hardware |
 
 ## Installation
 
