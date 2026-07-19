@@ -53,7 +53,7 @@ To avoid formatting drift, use the tokenizer's `apply_chat_template` during data
     {
       "messages": [
         {"role": "user", "content": "Tell me a joke."},
-        {"role": "model", "content": "Why did the computer go to the doctor? It had a virus!"}
+        {"role": "assistant", "content": "Why did the computer go to the doctor? It had a virus!"}
       ]
     }
     ```
