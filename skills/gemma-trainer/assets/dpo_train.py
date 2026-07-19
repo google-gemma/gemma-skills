@@ -26,15 +26,28 @@ except ImportError:
 from datasets import load_dataset
 from trl import DPOTrainer, DPOConfig
 
+
+def format_dpo_example(example):
+    """Return TRL's explicit conversational preference shape."""
+    return {
+        "prompt": [{"role": "user", "content": example["prompt"]}],
+        "chosen": [{"role": "assistant", "content": example["chosen"]}],
+        "rejected": [{"role": "assistant", "content": example["rejected"]}],
+    }
+
+
 def load_model_and_processor(
     base_model_name: str,
     adapter_path: str,
+    processor_name: str,
     max_length: int,
     use_unsloth: bool,
     use_qlora: bool,
 ):
     """Loads model and processor, configuring LoRA using either Unsloth or standard HF PEFT."""
     if use_unsloth:
+        if processor_name:
+            raise ValueError("--processor currently requires --force-hf.")
         if not HAS_UNSLOTH:
             raise RuntimeError("Unsloth is requested but not installed.")
 
@@ -74,7 +87,7 @@ def load_model_and_processor(
             )
 
         logger.info(f"Loading base model {base_model_name} with HF transformers...")
-        processor = AutoProcessor.from_pretrained("google/gemma-4-E2B-it")
+        processor = AutoProcessor.from_pretrained(processor_name or adapter_path)
         model = AutoModelForMultimodalLM.from_pretrained(
             base_model_name,
             **model_kwargs
@@ -93,6 +106,7 @@ def load_model_and_processor(
 def train_dpo(
     base_model_name: str,
     adapter_path: str,
+    processor_name: str,
     dataset_path: str,
     test_size: float,
     output_dir: str,
@@ -100,13 +114,17 @@ def train_dpo(
     batch_size: int,
     epochs: int,
     learning_rate: float,
+    seed: int,
     use_unsloth: bool,
     use_qlora: bool,
 ):
-    """Unified training runner for SFT using SFTConfig."""
+    """Unified training runner for DPO using DPOConfig."""
+    from transformers import set_seed
+    set_seed(seed)
     model, processor = load_model_and_processor(
         base_model_name=base_model_name,
         adapter_path=adapter_path,
+        processor_name=processor_name,
         max_length=max_length,
         use_unsloth=use_unsloth,
         use_qlora=use_qlora,
@@ -115,22 +133,9 @@ def train_dpo(
     logger.info(f"Loading dataset from {dataset_path}...")
     raw_dataset = load_dataset("json", data_files=dataset_path, split="train")
 
-    # Define a formatting function to inject the proper Chat Template structure
-    def apply_dpo_template(example):
-        # Format the standalone user prompt using conversational dictionary lists
-        prompt_msgs = [{"role": "user", "content": example["prompt"]}]
-        chosen_msgs = prompt_msgs + [{"role": "assistant", "content": example["chosen"]}]
-        rejected_msgs = prompt_msgs + [{"role": "assistant", "content": example["rejected"]}]
-        
-        # Extract the processed text strings using the model's processor/tokenizer
-        return {
-            "prompt": processor.apply_chat_template(prompt_msgs, tokenize=False, add_generation_prompt=True),
-            "chosen": processor.apply_chat_template(chosen_msgs, tokenize=False),
-            "rejected": processor.apply_chat_template(rejected_msgs, tokenize=False),
-        }
-    
-    logger.info("Formatting dataset strings with chat templates...")
-    dataset = raw_dataset.map(apply_dpo_template).train_test_split(test_size=test_size)
+    logger.info("Formatting dataset as explicit conversational preferences...")
+    dataset = raw_dataset.map(format_dpo_example).train_test_split(
+        test_size=test_size, seed=seed)
 
     logger.info("Initializing DPOTrainer...")
     # Standard PEFT DPOTrainer can also set ref_model=None to save memory,
@@ -152,6 +157,11 @@ def train_dpo(
             save_strategy="epoch",
             eval_strategy="epoch",
             max_length=max_length,
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
+            seed=seed,
+            data_seed=seed,
         ),
     )
 
@@ -172,6 +182,7 @@ if __name__ == "__main__":
     # Path configuration
     parser.add_argument("--base-model", type=str, default="google/gemma-4-E2B", help="The original base model name or HF repo")
     parser.add_argument("--adapter", type=str, required=True, help="Path to the existing SFT PEFT adapter directory")
+    parser.add_argument("--processor", type=str, default=None, help="HF processor repo/path (defaults to the SFT adapter directory; requires --force-hf)")
     parser.add_argument("--dataset", type=str, required=True, help="Path to JSON/JSONL preference dataset file")
     parser.add_argument("--output", type=str, default="./dpo_output", help="Output directory")
 
@@ -181,6 +192,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size per GPU (set to 1 to reduce OOM)")
     parser.add_argument("--epochs", type=int, default=1, help="Training epochs (usually 1 is sufficient)")
     parser.add_argument("--lr", type=float, default=1e-6, help="DPO learning rate (typically much smaller than SFT, e.g., 1e-6)")
+    parser.add_argument("--seed", type=int, default=42, help="Seed for dataset split and training")
 
     # Execution options
     parser.add_argument("--force-hf", action="store_true", help="Force HF standard training even if Unsloth is installed")
@@ -194,6 +206,7 @@ if __name__ == "__main__":
     train_dpo(
         base_model_name=args.base_model,
         adapter_path=args.adapter,
+        processor_name=args.processor,
         dataset_path=args.dataset,
         test_size=args.test_size,
         output_dir=args.output,
@@ -201,6 +214,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         epochs=args.epochs,
         learning_rate=args.lr,
+        seed=args.seed,
         use_unsloth=use_unsloth,
         use_qlora=use_qlora,
     )

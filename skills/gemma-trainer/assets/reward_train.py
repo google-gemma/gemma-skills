@@ -12,7 +12,7 @@ import torch
 import logging
 
 from datasets import load_dataset
-from transformers import AutoProcessor, AutoModelForSequenceClassification
+from transformers import AutoProcessor, AutoModelForSequenceClassification, set_seed
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import RewardTrainer, RewardConfig
 
@@ -22,6 +22,7 @@ logger = logging.getLogger("gemma-reward-model")
 
 def train_reward_model(
     model_name: str,
+    processor_name: str,
     dataset_path: str,
     test_size: float,
     output_dir: str,
@@ -31,9 +32,11 @@ def train_reward_model(
     batch_size: int,
     epochs: int,
     learning_rate: float,
+    seed: int,
     use_qlora: bool,
 ):
     """Fine-tunes a Gemma sequence classification model as a Reward Model."""
+    set_seed(seed)
 
     torch_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
 
@@ -55,7 +58,10 @@ def train_reward_model(
 
     # Load model & processor
     logger.info(f"Loading {model_name} with classification head (num_labels=1)...")
-    processor = AutoProcessor.from_pretrained("google/gemma-3-270m-it")
+    processor_model_id = processor_name or (
+        model_name if "-it" in model_name else f"{model_name}-it"
+    )
+    processor = AutoProcessor.from_pretrained(processor_model_id)
     
     model = AutoModelForSequenceClassification.from_pretrained(
         model_name,
@@ -83,7 +89,7 @@ def train_reward_model(
     logger.info(f"Loading dataset from {dataset_path}...")
     raw_dataset = load_dataset("json", data_files=dataset_path, split="train")
 
-    dataset = raw_dataset.train_test_split(test_size=test_size)
+    dataset = raw_dataset.train_test_split(test_size=test_size, seed=seed)
 
     # 5. Initialize RewardTrainer
     logger.info("Initializing RewardTrainer...")
@@ -103,6 +109,11 @@ def train_reward_model(
             eval_strategy="epoch",
             save_strategy="epoch",
             max_length=max_length,
+            load_best_model_at_end=True,
+            metric_for_best_model="eval_loss",
+            greater_is_better=False,
+            seed=seed,
+            data_seed=seed,
         ),
     )
 
@@ -122,6 +133,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a Gemma Reward Model")
     parser.add_argument("--model", type=str, default="google/gemma-3-270m", help="Model repo or local path")
     parser.add_argument("--dataset", type=str, required=True, help="Path to JSON/JSONL pairwise preference dataset")
+    parser.add_argument("--processor", type=str, default=None, help="Processor repo/path (defaults to the model's matching -it processor)")
     parser.add_argument("--test-size", type=float, default=0.2, help="dataset test split size")
     parser.add_argument("--output", type=str, default="./rm_output", help="Output directory")
     parser.add_argument("--max-len", type=int, default=2048, help="Max sequence length")
@@ -130,6 +142,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=2, help="Batch size per GPU")
     parser.add_argument("--epochs", type=int, default=3, help="Training epochs")
     parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate (typically much higher than SFT, e.g., 1e-3)")
+    parser.add_argument("--seed", type=int, default=42, help="Seed for dataset split and training")
     parser.add_argument("--force-no-qlora", action="store_true", help="Disable QLoRA")
 
     args = parser.parse_args()
@@ -138,6 +151,7 @@ if __name__ == "__main__":
 
     train_reward_model(
         model_name=args.model,
+        processor_name=args.processor,
         dataset_path=args.dataset,
         test_size=args.test_size,
         output_dir=args.output,
@@ -147,5 +161,6 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         epochs=args.epochs,
         learning_rate=args.lr,
+        seed=args.seed,
         use_qlora=use_qlora,
     )
