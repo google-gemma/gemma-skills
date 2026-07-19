@@ -8,6 +8,7 @@ efficiency on single GPUs) or standard Hugging Face PEFT + TRL (fallback).
 import torch
 import logging
 import numpy as np
+import re
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -25,8 +26,54 @@ except ImportError:
 from datasets import load_dataset
 from trl import SFTTrainer, SFTConfig
 
+
+_ASSISTANT_MARKER = "<|turn>model\n"
+
+
+def find_last_subsequence(sequence, subsequence):
+    """Return the start of the last exact subsequence match, or None."""
+    if not subsequence:
+        raise ValueError("assistant marker token sequence must be non-empty")
+    match = None
+    for idx in range(len(sequence) - len(subsequence) + 1):
+        if sequence[idx:idx + len(subsequence)] == subsequence:
+            match = idx
+    return match
+
+
+def validate_final_assistant(messages):
+    """Reject rows whose final response cannot be masked safely."""
+    if (
+        not messages
+        or not isinstance(messages[-1], dict)
+        or messages[-1].get("role") != "assistant"
+    ):
+        raise ValueError("Each example must end with an assistant message.")
+    content = messages[-1].get("content")
+    if isinstance(content, str):
+        response_text = content
+    elif isinstance(content, list):
+        # Gemma 4's template concatenates adjacent assistant text blocks directly.
+        response_text = "".join(
+            block.get("text", "")
+            for block in content
+            if isinstance(block, dict)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+        )
+    else:
+        response_text = ""
+    if not response_text.strip():
+        raise ValueError("The final assistant message must contain non-empty text.")
+    if re.search(r"<(?:\|[^<>]+|[^<>]+\|)>", response_text):
+        raise ValueError(
+            "The final assistant response contains a reserved Gemma control token."
+        )
+
+
 def load_model_and_processor(
     model_name: str,
+    processor_name: str,
     max_length: int,
     lora_r: int,
     lora_alpha: int,
@@ -35,10 +82,11 @@ def load_model_and_processor(
 ):
     """Loads model and processor, configuring LoRA using either Unsloth or standard HF PEFT."""
     # Determine reference IT model for processor fallback if base PT model is used
-    processor_model_id = model_name if "-it" in model_name else f"{model_name}-it"
-    fallback_model_id = "google/gemma-4-E2B-it"
+    processor_model_id = processor_name or (model_name if "-it" in model_name else f"{model_name}-it")
 
     if use_unsloth:
+        if processor_name:
+            raise ValueError("--processor currently requires --force-hf.")
         if not HAS_UNSLOTH:
             raise RuntimeError("Unsloth is requested but not installed.")
 
@@ -102,12 +150,8 @@ def load_model_and_processor(
             # ===================================
 
         # Load model & processor
-        try:
-            logger.info(f"Loading processor config from {processor_model_id}...")
-            processor = AutoProcessor.from_pretrained(processor_model_id)
-        except OSError:
-            logger.warning(f"Failed to load {processor_model_id}. Falling back to {fallback_model_id}.")
-            processor = AutoProcessor.from_pretrained(fallback_model_id)
+        logger.info(f"Loading processor config from {processor_model_id}...")
+        processor = AutoProcessor.from_pretrained(processor_model_id)
         
         logger.info(f"Loading base model weights from {model_name}...")        
         model = AutoModelForMultimodalLM.from_pretrained(
@@ -160,6 +204,7 @@ def get_collate_fn(processor):
 
         for example in examples:
             messages = example.get("messages", [])
+            validate_final_assistant(messages)
 
             full_text = processor.apply_chat_template(
                 messages, add_generation_prompt=False, tokenize=False
@@ -186,9 +231,11 @@ def get_collate_fn(processor):
                                     audio_array = audio_array.squeeze()
 
                                 example_audio = audio_array
-                            except Exception as e:
-                                print(f"Error loading audio file {audio_path}: {e}")
-                                example_audio = np.zeros(1, dtype=np.float32)
+                            except Exception:
+                                raise ValueError(
+                                    "Failed to load an audio block; refusing to replace private "
+                                    "training input with silent audio."
+                                ) from None
 
                         elif block.get("type") == "image":
                             image_path = block.get("image") or block.get("url")
@@ -216,27 +263,26 @@ def get_collate_fn(processor):
         # The labels are the input_ids, and we mask the padding tokens in the loss computation
         labels = batch["input_ids"].clone()
 
-        target_phrase = "<|turn>model\n"
-        target_tokens = processor.tokenizer.encode(target_phrase, add_special_tokens=False)
+        target_tokens = processor.tokenizer.encode(
+            _ASSISTANT_MARKER, add_special_tokens=False)
         target_len = len(target_tokens)
 
         for i in range(labels.size(0)):
             row_tokens = batch["input_ids"][i].tolist()
 
             # Find where the assistant block begins
-            assistant_start_idx = None
-            for idx in range(len(row_tokens) - target_len + 1):
-                if row_tokens[idx : idx + target_len] == target_tokens:
-                    # We want to keep loss calculation on the assistant transcription tokens,
-                    # so we move the index right past the assistant header ('<|turn>model\n')
-                    assistant_start_idx = idx + target_len
-                    break
-
-            if assistant_start_idx is not None:
-                labels[i, :assistant_start_idx] = -100
-            else:
-                # Fallback safety: if template matching fails for an anomalous row, mask padding anyway
-                labels[i, labels[i] == processor.tokenizer.pad_token_id] = -100
+            marker_idx = find_last_subsequence(row_tokens, target_tokens)
+            if marker_idx is None:
+                raise ValueError(
+                    f"Example {i}: assistant marker was not found after applying the chat "
+                    "template; refusing to supervise prompt tokens."
+                )
+            # Supervise only the final assistant turn. Using the first marker in a multi-turn
+            # conversation would also train on intervening user text.
+            assistant_start_idx = marker_idx + target_len
+            if assistant_start_idx >= len(row_tokens):
+                raise ValueError(f"Example {i}: final assistant response has no tokens.")
+            labels[i, :assistant_start_idx] = -100
 
         # Mask tokens for not being used in the loss computation
         labels[labels == processor.tokenizer.pad_token_id] = -100
@@ -250,6 +296,7 @@ def get_collate_fn(processor):
 
 def train(
     model_name: str,
+    processor_name: str,
     dataset_path: str,
     test_size: float,
     output_dir: str,
@@ -259,12 +306,16 @@ def train(
     batch_size: int,
     epochs: int,
     learning_rate: float,
+    seed: int,
     use_unsloth: bool,
     use_qlora: bool,
 ):
     """Unified training runner for SFT using SFTConfig."""
+    from transformers import set_seed
+    set_seed(seed)
     model, processor = load_model_and_processor(
         model_name=model_name,
+        processor_name=processor_name,
         max_length=max_length,
         lora_r=lora_r,
         lora_alpha=lora_alpha,
@@ -274,7 +325,8 @@ def train(
 
     # Load and format dataset
     logger.info(f"Loading dataset from {dataset_path}...")
-    dataset = load_dataset("json", data_files=dataset_path, split="train").train_test_split(test_size=test_size)
+    dataset = load_dataset("json", data_files=dataset_path, split="train").train_test_split(
+        test_size=test_size, seed=seed)
 
     collate_fn = get_collate_fn(processor)
     total_steps = (len(dataset['train']) // batch_size) * epochs
@@ -305,6 +357,8 @@ def train(
             load_best_model_at_end=True,
             metric_for_best_model="eval_loss", # track loss, not accuracy
             greater_is_better=False,           # Lower loss is better
+            seed=seed,
+            data_seed=seed,
         ),
     )
 
@@ -324,6 +378,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Fine-tune Gemma models using SFT QLoRA")
     parser.add_argument("--model", type=str, default="google/gemma-4-E2B", help="Model repo or local path")
     parser.add_argument("--dataset", type=str, required=True, help="Path to JSON/JSONL dataset file")
+    parser.add_argument("--processor", type=str, default=None, help="HF processor repo/path (defaults to the model's matching -it processor; requires --force-hf)")
     parser.add_argument("--test-size", type=float, default=0.2, help="dataset test split size")
     parser.add_argument("--output", type=str, default="./sft_output", help="Output directory")
     parser.add_argument("--max-len", type=int, default=2048, help="Max sequence length")
@@ -332,6 +387,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=2, help="Batch size per GPU")
     parser.add_argument("--epochs", type=int, default=3, help="Training epochs")
     parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
+    parser.add_argument("--seed", type=int, default=42, help="Seed for dataset split and training")
     parser.add_argument("--force-hf", action="store_true", help="Force HF standard training even if Unsloth is installed")
     parser.add_argument("--force-no-qlora", action="store_true", help="Disable QLoRA")
 
@@ -342,6 +398,7 @@ if __name__ == "__main__":
 
     train(
         model_name=args.model,
+        processor_name=args.processor,
         dataset_path=args.dataset,
         test_size=args.test_size,
         output_dir=args.output,
@@ -351,6 +408,7 @@ if __name__ == "__main__":
         batch_size=args.batch_size,
         epochs=args.epochs,
         learning_rate=args.lr,
+        seed=args.seed,
         use_unsloth=use_unsloth,
         use_qlora=use_qlora,
     )

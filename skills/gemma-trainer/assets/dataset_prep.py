@@ -10,8 +10,7 @@ import os
 import argparse
 import json
 import logging
-from typing import List, Dict, Any, Union
-from transformers import AutoTokenizer
+from typing import List, Dict, Any
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -55,6 +54,9 @@ def load_dataset_file(file_path: str) -> List[Dict[str, Any]]:
 
 def validate_sft_item(item: Dict[str, Any], idx: int) -> bool:
     """Validates an SFT conversation item."""
+    if not isinstance(item, dict):
+        logger.warning(f"Item {idx}: SFT samples must be dictionaries.")
+        return False
     if "messages" not in item:
         logger.warning(f"Item {idx}: Missing 'messages' field. SFT expects a list of role/content dictionaries.")
         return False
@@ -79,11 +81,30 @@ def validate_sft_item(item: Dict[str, Any], idx: int) -> bool:
     if messages[-1]["role"] != "assistant":
         logger.warning(f"Item {idx}: The conversation does not end with a 'assistant' message. SFT models train on generating the final 'assistant' content.")
         return False
+    final_content = messages[-1]["content"]
+    if isinstance(final_content, str):
+        has_response = bool(final_content.strip())
+    elif isinstance(final_content, list):
+        has_response = any(
+            isinstance(block, dict)
+            and block.get("type") == "text"
+            and isinstance(block.get("text"), str)
+            and block["text"].strip()
+            for block in final_content
+        )
+    else:
+        has_response = False
+    if not has_response:
+        logger.warning(f"Item {idx}: The final assistant message needs non-empty text content.")
+        return False
         
     return True
 
 def validate_dpo_item(item: Dict[str, Any], idx: int) -> bool:
     """Validates a DPO pairwise preference item."""
+    if not isinstance(item, dict):
+        logger.warning(f"Item {idx}: Preference samples must be dictionaries.")
+        return False
     required_keys = ["prompt", "chosen", "rejected"]
     missing = [k for k in required_keys if k not in item]
     if missing:
@@ -102,7 +123,7 @@ def validate_dpo_item(item: Dict[str, Any], idx: int) -> bool:
         
     return True
 
-def validate_dpo_tokenization(item: Dict[str, Any], idx: int, tokenizer: AutoTokenizer) -> bool:
+def validate_dpo_tokenization(item: Dict[str, Any], idx: int, tokenizer: Any) -> bool:
     """
     Validates a DPO preference item to ensure tokenization consistency.
     Verifies that the standalone prompt tokens perfectly match the beginning
@@ -117,15 +138,12 @@ def validate_dpo_tokenization(item: Dict[str, Any], idx: int, tokenizer: AutoTok
         chosen_chat = prompt_chat + [{"role": "assistant", "content": item["chosen"]}]
         rejected_chat = prompt_chat + [{"role": "assistant", "content": item["rejected"]}]
 
-        # 2. Apply chat template without tokenizing to see raw strings
-        prompt_str = tokenizer.apply_chat_template(prompt_chat, tokenize=False, add_generation_prompt=True)
-        chosen_str = tokenizer.apply_chat_template(chosen_chat, tokenize=False)
-        rejected_str = tokenizer.apply_chat_template(rejected_chat, tokenize=False)
-
-        # 3. Tokenize all strings
-        prompt_ids = tokenizer.encode(prompt_str)
-        chosen_ids = tokenizer.encode(chosen_str)
-        rejected_ids = tokenizer.encode(rejected_str)
+        # 2. Apply the tokenizer's template directly. Rendering and then calling encode()
+        # can add special tokens twice and create a false boundary mismatch.
+        prompt_ids = tokenizer.apply_chat_template(
+            prompt_chat, tokenize=True, add_generation_prompt=True)
+        chosen_ids = tokenizer.apply_chat_template(chosen_chat, tokenize=True)
+        rejected_ids = tokenizer.apply_chat_template(rejected_chat, tokenize=True)
 
         prompt_len = len(prompt_ids)
 
@@ -136,31 +154,23 @@ def validate_dpo_tokenization(item: Dict[str, Any], idx: int, tokenizer: AutoTok
         mismatch_found = False
 
         if prompt_ids != chosen_prefix:
-            logger.warning(
-                f"Item {idx}: Token mismatch between standalone prompt and 'chosen' sequence prefix.\n"
-                f"Prompt IDs:  {prompt_ids}\n"
-                f"Chosen IDs:  {chosen_prefix}"
-            )
+            logger.warning(f"Item {idx}: Token mismatch in the chosen-sequence prompt prefix.")
             mismatch_found = True
 
         if prompt_ids != rejected_prefix:
-            logger.warning(
-                f"Item {idx}: Token mismatch between standalone prompt and 'rejected' sequence prefix.\n"
-                f"Prompt IDs:  {prompt_ids}\n"
-                f"Rejected IDs:{rejected_prefix}"
-            )
+            logger.warning(f"Item {idx}: Token mismatch in the rejected-sequence prompt prefix.")
             mismatch_found = True
 
         if mismatch_found:
-            # Provide debug context so you can spot whitespace or special token issues
-            logger.warning(f"Item {idx} Prompt Raw: {repr(prompt_str)}")
-            logger.warning(f"Item {idx} Chosen Raw: {repr(chosen_str)}")
             return False
 
         return True
 
     except Exception as e:
-        logger.error(f"Item {idx}: Exception during token validation: {str(e)}")
+        logger.error(
+            f"Item {idx}: Token validation failed with {type(e).__name__}; "
+            "sample contents were omitted."
+        )
         return False
 
 def run_validation(file_path: str, task_type: str, max_seq_length: int = 2048, tokenizer_name: str = None) -> bool:
@@ -173,53 +183,81 @@ def run_validation(file_path: str, task_type: str, max_seq_length: int = 2048, t
         logger.error(f"Failed to load file: {e}")
         return False
         
+    if max_seq_length <= 0:
+        logger.error("max_seq_length must be positive.")
+        return False
+
     valid_count = 0
     total_count = len(dataset)
+    if total_count == 0:
+        logger.error("Dataset is empty; refusing to report a vacuous success.")
+        return False
     
     # Try importing transformers tokenizer if provided
-    tokenizer = None
-    if tokenizer_name:
-        try:
-            logger.info(f"Loading tokenizer '{tokenizer_name}' for length checks...")
-            tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        except ImportError:
-            logger.warning("transformers library not installed. Skipping precise token length checks (will use character count heuristic).")
-        except Exception as e:
-            logger.error(f"Could not load tokenizer '{tokenizer_name}': {e}")
+    if not tokenizer_name:
+        logger.error("A tokenizer is required for template, boundary, and length validation.")
+        return False
+    try:
+        from transformers import AutoTokenizer
+        logger.info(f"Loading tokenizer '{tokenizer_name}' for template and length checks...")
+        tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+    except ImportError:
+        logger.error("transformers is required for tokenizer-aware validation.")
+        return False
+    except Exception as e:
+        logger.error(f"Could not load tokenizer '{tokenizer_name}': {type(e).__name__}")
+        return False
             
     long_sequences = 0
     
     for i, item in enumerate(dataset):
         is_valid = False
-        sample_text_for_length = ""
+        token_lengths = []
         
         if task_type == "sft":
             is_valid = validate_sft_item(item, i)
             if is_valid:
-                sample_text_for_length = tokenizer.apply_chat_template(item["messages"], tokenize=False)
+                try:
+                    token_lengths.append(len(tokenizer.apply_chat_template(
+                        item["messages"], tokenize=True)))
+                except Exception as e:
+                    logger.error(
+                        f"Item {i}: Template validation failed with {type(e).__name__}; "
+                        "sample contents were omitted."
+                    )
+                    is_valid = False
         elif task_type in ["dpo", "reward"]:
             is_valid = validate_dpo_item(item, i)
             if is_valid:
                 # Run the strict token consistency validation
                 is_token_consistent = validate_dpo_tokenization(item, i, tokenizer)
                 if not is_token_consistent:
-                    # You can choose to mark the item invalid, or just keep it as a warning
                     logger.warning(f"Item {i} failed token alignment validation.")
+                    is_valid = False
 
-                # Safe sequence length measurement using the full text
-                sample_text_for_length = tokenizer.apply_chat_template(
-                    [{"role": "user", "content": item["prompt"]}, {"role": "assistant", "content": item["chosen"]}],
-                    tokenize=False
-                )
+                # Both branches are training inputs and must fit without truncation.
+                try:
+                    for response_key in ("chosen", "rejected"):
+                        tokens = tokenizer.apply_chat_template(
+                            [
+                                {"role": "user", "content": item["prompt"]},
+                                {"role": "assistant", "content": item[response_key]},
+                            ],
+                            tokenize=True,
+                        )
+                        token_lengths.append(len(tokens))
+                except Exception as e:
+                    logger.error(
+                        f"Item {i}: Template validation failed with {type(e).__name__}; "
+                        "sample contents were omitted."
+                    )
+                    is_valid = False
                 
         if is_valid:
-            logger.info(f"Item {i}: {sample_text_for_length}")
             valid_count += 1
             
             # Check length constraints
-            tokens = tokenizer.encode(sample_text_for_length)
-            num_tokens = len(tokens)
-                
+            num_tokens = max(token_lengths)
             if num_tokens > max_seq_length:
                 long_sequences += 1
                 logger.warning(f"Item {i}: Estimated length ({num_tokens} tokens) exceeds target max_seq_length ({max_seq_length}). This might trigger OOM or truncation.")
@@ -234,8 +272,8 @@ def run_validation(file_path: str, task_type: str, max_seq_length: int = 2048, t
         logger.info("STATUS: SUCCESS. Dataset is fully valid and clean!")
         return True
     elif valid_count == total_count:
-        logger.warning("STATUS: PASSED with warnings. Schema is correct, but some samples exceed the recommended max token length.")
-        return True
+        logger.error("STATUS: FAILED. One or more samples exceed max_seq_length and would be truncated.")
+        return False
     else:
         logger.error(f"STATUS: FAILED. Found {total_count - valid_count} invalid samples. Please clean dataset before training.")
         return False
