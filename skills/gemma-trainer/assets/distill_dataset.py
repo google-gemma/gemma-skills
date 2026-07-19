@@ -186,7 +186,7 @@ def run_response_distillation(args) -> List[Dict[str, Any]]:
     if args.use_ollama:
         logger.info(f"Using Ollama API ({args.ollama_url}) with model '{args.ollama_model}' for generation...")
         for i, p in enumerate(prompts, 1):
-            logger.info(f"[{i}/{len(prompts)}] Generating response for prompt: {p[:60]}...")
+            logger.info(f"[{i}/{len(prompts)}] Generating response.")
             messages = []
             if args.system_prompt:
                 messages.append({"role": "system", "content": args.system_prompt})
@@ -204,20 +204,19 @@ def run_response_distillation(args) -> List[Dict[str, Any]]:
             turn = {
                 "messages": [
                     {"role": "user", "content": p},
-                    {"role": "model", "content": response}
+                    {"role": "assistant", "content": response}
                 ]
             }
             if args.system_prompt:
                 turn["messages"].insert(0, {"role": "system", "content": args.system_prompt})
             dataset.append(turn)
     else:
-        from transformers import TextStreamer
-        pipeline_obj, config_obj = init_hf_pipeline(args.model)
+        pipeline_obj, config_obj = init_hf_pipeline(args.model, not args.force_no_qlora)
         for i, p in enumerate(prompts, 1):
-            logger.info(f"[{i}/{len(prompts)}] Generating response for prompt: {p[:60]}...")
+            logger.info(f"[{i}/{len(prompts)}] Generating response.")
             config_obj.max_new_tokens=args.max_new_tokens
-            config_obj.temperatur=args.temperature
-            gen_kwargs = dict(generation_config=config_obj, streamer=TextStreamer(pipeline_obj.tokenizer))
+            config_obj.temperature=args.temperature
+            gen_kwargs = dict(generation_config=config_obj)
             response = generate_response_hf(
                 pipeline_obj=pipeline_obj,
                 gen_kwargs=gen_kwargs,
@@ -228,7 +227,7 @@ def run_response_distillation(args) -> List[Dict[str, Any]]:
             turn = {
                 "messages": [
                     {"role": "user", "content": p},
-                    {"role": "model", "content": response}
+                    {"role": "assistant", "content": response}
                 ]
             }
             if args.system_prompt:
@@ -279,7 +278,7 @@ def run_self_instruct_synthesis(args) -> List[Dict[str, Any]]:
         "  {\n"
         "    \"messages\": [\n"
         "      {\"role\": \"user\", \"content\": \"<detailed instruction/prompt>\"},\n"
-        "      {\"role\": \"model\", \"content\": \"<high-quality comprehensive expert response>\"}\n"
+        "      {\"role\": \"assistant\", \"content\": \"<high-quality comprehensive expert response>\"}\n"
         "    ]\n"
         "  }\n"
         "]"
@@ -300,8 +299,6 @@ def run_self_instruct_synthesis(args) -> List[Dict[str, Any]]:
                 temp=args.temperature,
                 max_tokens=args.max_new_tokens
             )
-            print(raw_response)
-            
             # Clean up potential markdown wrappers
             cleaned = raw_response.strip()
             if cleaned.startswith("```json"):
@@ -316,17 +313,16 @@ def run_self_instruct_synthesis(args) -> List[Dict[str, Any]]:
                     dataset.extend(batch_data)
                     logger.info(f"Added {len(batch_data)} synthetic samples from batch {b}.")
                 else:
-                    logger.warning(f"Batch {b} did not return a list. Response content: {cleaned[:100]}")
+                    logger.warning(f"Batch {b} did not return a JSON list.")
             except Exception as e:
                 logger.error(f"Failed to parse JSON from batch {b}: {e}. Retrying or skipping.")
                 continue
     else:
-        from transformers import TextStreamer
         pipeline_obj, config_obj = init_hf_pipeline(args.model, not args.force_no_qlora)
         for b in range(1, num_batches + 1):
             config_obj.max_new_tokens=args.max_new_tokens
-            config_obj.temperatur=args.temperature
-            gen_kwargs = dict(generation_config=config_obj, streamer=TextStreamer(pipeline_obj.tokenizer))
+            config_obj.temperature=args.temperature
+            gen_kwargs = dict(generation_config=config_obj)
 
             logger.info(f"Processing batch {b}/{num_batches}...")
             raw_response = generate_response_hf(
@@ -349,7 +345,7 @@ def run_self_instruct_synthesis(args) -> List[Dict[str, Any]]:
                     dataset.extend(batch_data)
                     logger.info(f"Added {len(batch_data)} synthetic samples from batch {b}.")
                 else:
-                    logger.warning(f"Batch {b} did not return a list. Response content: {cleaned[:100]}")
+                    logger.warning(f"Batch {b} did not return a JSON list.")
             except Exception as e:
                 logger.error(f"Failed to parse JSON from batch {b}: {e}.")
                 continue
