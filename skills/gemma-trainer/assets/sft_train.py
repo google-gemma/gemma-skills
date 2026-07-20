@@ -15,7 +15,7 @@ logger = logging.getLogger("gemma-sft")
 
 # Attempt to import Unsloth for high-performance single-GPU training
 try:
-    from unsloth import FastModel
+    from unsloth import FastVisionModel
     HAS_UNSLOTH = True
     logger.info("Unsloth library detected! Will use optimized single-GPU training.")
 except ImportError:
@@ -24,6 +24,7 @@ except ImportError:
 
 from datasets import load_dataset
 from trl import SFTTrainer, SFTConfig
+from training_utils import mask_assistant_tokens, processor_kwargs
 
 def load_model_and_processor(
     model_name: str,
@@ -43,7 +44,7 @@ def load_model_and_processor(
             raise RuntimeError("Unsloth is requested but not installed.")
 
         logger.info(f"Loading {model_name} with Unsloth...")
-        model, processor = FastModel.from_pretrained(
+        model, processor = FastVisionModel.from_pretrained(
             model_name=model_name,
             max_seq_length=max_length,
             dtype=None,  # Auto-detection
@@ -56,9 +57,9 @@ def load_model_and_processor(
         processor = get_chat_template(processor, chat_template="gemma-4")
 
         logger.info("Configuring LoRA adapters...")
-        model = FastModel.get_peft_model(
+        model = FastVisionModel.get_peft_model(
             model,
-            finetune_vision_layers     = True, # False if not finetuning vision layers
+            finetune_vision_layers     = False, # Start with language-side adaptation
             finetune_language_layers   = True, # False if not finetuning language layers
             finetune_attention_modules = True, # False if not finetuning attention layers
             finetune_mlp_modules       = True, # False if not finetuning MLP layers
@@ -132,7 +133,7 @@ def load_model_and_processor(
 
     return model, processor
 
-def get_collate_fn(processor):
+def get_collate_fn(processor, max_length):
     """Creates a custom data collator that masks user prompts in loss computation."""
     def collate_fn(examples):
         texts = []
@@ -199,47 +200,32 @@ def get_collate_fn(processor):
             if batch_has_audio:
                 audios.append(example_audio)
 
-        processor_kwargs = {
-            "text": texts,
-            "return_tensors": "pt",
-            "padding": True
-        }
+        batch_kwargs = processor_kwargs(texts, max_length)
 
         if batch_has_audio:
-            processor_kwargs["audio"] = audios
+            batch_kwargs["audio"] = audios
         if any(len(img_list) > 0 for img_list in images):
-            processor_kwargs["images"] = images
+            batch_kwargs["images"] = images
 
         # Tokenize the texts
-        batch = processor(**processor_kwargs)
-
-        # The labels are the input_ids, and we mask the padding tokens in the loss computation
-        labels = batch["input_ids"].clone()
+        batch = processor(**batch_kwargs)
 
         target_phrase = "<|turn>model\n"
         target_tokens = processor.tokenizer.encode(target_phrase, add_special_tokens=False)
-        target_len = len(target_tokens)
+        turn_end_tokens = processor.tokenizer.encode("<turn|>", add_special_tokens=False)
+        labels = batch["input_ids"].clone()
 
         for i in range(labels.size(0)):
             row_tokens = batch["input_ids"][i].tolist()
-
-            # Find where the assistant block begins
-            assistant_start_idx = None
-            for idx in range(len(row_tokens) - target_len + 1):
-                if row_tokens[idx : idx + target_len] == target_tokens:
-                    # We want to keep loss calculation on the assistant transcription tokens,
-                    # so we move the index right past the assistant header ('<|turn>model\n')
-                    assistant_start_idx = idx + target_len
-                    break
-
-            if assistant_start_idx is not None:
-                labels[i, :assistant_start_idx] = -100
-            else:
-                # Fallback safety: if template matching fails for an anomalous row, mask padding anyway
-                labels[i, labels[i] == processor.tokenizer.pad_token_id] = -100
-
-        # Mask tokens for not being used in the loss computation
-        labels[labels == processor.tokenizer.pad_token_id] = -100
+            masked = mask_assistant_tokens(
+                row_tokens,
+                assistant_start=target_tokens,
+                turn_end=turn_end_tokens,
+                pad_token_id=processor.tokenizer.pad_token_id,
+            )
+            labels[i] = torch.tensor(
+                masked, dtype=labels.dtype, device=labels.device
+            )
 
         batch["labels"] = labels
 
@@ -276,7 +262,20 @@ def train(
     logger.info(f"Loading dataset from {dataset_path}...")
     dataset = load_dataset("json", data_files=dataset_path, split="train").train_test_split(test_size=test_size)
 
-    collate_fn = get_collate_fn(processor)
+    if use_unsloth:
+        from unsloth.trainer import UnslothVisionDataCollator
+
+        collate_fn = UnslothVisionDataCollator(
+            model,
+            processor,
+            max_seq_length=max_length,
+            train_on_responses_only=True,
+            instruction_part="<|turn>user\n",
+            response_part="<|turn>model\n",
+            completion_only_loss=True,
+        )
+    else:
+        collate_fn = get_collate_fn(processor, max_length)
     total_steps = (len(dataset['train']) // batch_size) * epochs
 
     # Configure trainer
