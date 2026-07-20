@@ -25,6 +25,7 @@ except ImportError:
 
 from datasets import load_dataset
 from trl import DPOTrainer, DPOConfig
+from training_utils import to_conversational_preference
 
 def load_model_and_processor(
     base_model_name: str,
@@ -74,7 +75,15 @@ def load_model_and_processor(
             )
 
         logger.info(f"Loading base model {base_model_name} with HF transformers...")
-        processor = AutoProcessor.from_pretrained("google/gemma-4-E2B-it")
+        try:
+            processor = AutoProcessor.from_pretrained(adapter_path)
+        except OSError:
+            processor_model_id = (
+                base_model_name
+                if "-it" in base_model_name
+                else f"{base_model_name}-it"
+            )
+            processor = AutoProcessor.from_pretrained(processor_model_id)
         model = AutoModelForMultimodalLM.from_pretrained(
             base_model_name,
             **model_kwargs
@@ -103,7 +112,7 @@ def train_dpo(
     use_unsloth: bool,
     use_qlora: bool,
 ):
-    """Unified training runner for SFT using SFTConfig."""
+    """Run DPO alignment from an existing SFT adapter."""
     model, processor = load_model_and_processor(
         base_model_name=base_model_name,
         adapter_path=adapter_path,
@@ -115,22 +124,10 @@ def train_dpo(
     logger.info(f"Loading dataset from {dataset_path}...")
     raw_dataset = load_dataset("json", data_files=dataset_path, split="train")
 
-    # Define a formatting function to inject the proper Chat Template structure
-    def apply_dpo_template(example):
-        # Format the standalone user prompt using conversational dictionary lists
-        prompt_msgs = [{"role": "user", "content": example["prompt"]}]
-        chosen_msgs = prompt_msgs + [{"role": "assistant", "content": example["chosen"]}]
-        rejected_msgs = prompt_msgs + [{"role": "assistant", "content": example["rejected"]}]
-        
-        # Extract the processed text strings using the model's processor/tokenizer
-        return {
-            "prompt": processor.apply_chat_template(prompt_msgs, tokenize=False, add_generation_prompt=True),
-            "chosen": processor.apply_chat_template(chosen_msgs, tokenize=False),
-            "rejected": processor.apply_chat_template(rejected_msgs, tokenize=False),
-        }
-    
-    logger.info("Formatting dataset strings with chat templates...")
-    dataset = raw_dataset.map(apply_dpo_template).train_test_split(test_size=test_size)
+    # TRL applies the processor chat template to conversational preferences.
+    # Keeping prompt and completions separate avoids duplicating the prompt.
+    logger.info("Formatting conversational preference records...")
+    dataset = raw_dataset.map(to_conversational_preference).train_test_split(test_size=test_size)
 
     logger.info("Initializing DPOTrainer...")
     # Standard PEFT DPOTrainer can also set ref_model=None to save memory,
@@ -152,6 +149,7 @@ def train_dpo(
             save_strategy="epoch",
             eval_strategy="epoch",
             max_length=max_length,
+            beta=0.1,
         ),
     )
 
