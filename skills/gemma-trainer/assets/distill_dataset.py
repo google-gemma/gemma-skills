@@ -78,7 +78,7 @@ def load_seed_prompts(input_path: str) -> List[str]:
     logger.info(f"Loaded {len(prompts)} seed prompts/topics from {input_path}")
     return prompts
 
-def init_hf_pipeline(model_id: str, use_qlora):
+def init_hf_pipeline(model_id: str, use_qlora: bool):
     """Initializes Hugging Face model and processor."""
     try:
         import torch
@@ -204,7 +204,7 @@ def run_response_distillation(args) -> List[Dict[str, Any]]:
             turn = {
                 "messages": [
                     {"role": "user", "content": p},
-                    {"role": "model", "content": response}
+                    {"role": "assistant", "content": response}
                 ]
             }
             if args.system_prompt:
@@ -212,11 +212,13 @@ def run_response_distillation(args) -> List[Dict[str, Any]]:
             dataset.append(turn)
     else:
         from transformers import TextStreamer
-        pipeline_obj, config_obj = init_hf_pipeline(args.model)
+        pipeline_obj, config_obj = init_hf_pipeline(
+            args.model, not args.force_no_qlora
+        )
         for i, p in enumerate(prompts, 1):
             logger.info(f"[{i}/{len(prompts)}] Generating response for prompt: {p[:60]}...")
             config_obj.max_new_tokens=args.max_new_tokens
-            config_obj.temperatur=args.temperature
+            config_obj.temperature=args.temperature
             gen_kwargs = dict(generation_config=config_obj, streamer=TextStreamer(pipeline_obj.tokenizer))
             response = generate_response_hf(
                 pipeline_obj=pipeline_obj,
@@ -228,7 +230,7 @@ def run_response_distillation(args) -> List[Dict[str, Any]]:
             turn = {
                 "messages": [
                     {"role": "user", "content": p},
-                    {"role": "model", "content": response}
+                    {"role": "assistant", "content": response}
                 ]
             }
             if args.system_prompt:
@@ -279,7 +281,7 @@ def run_self_instruct_synthesis(args) -> List[Dict[str, Any]]:
         "  {\n"
         "    \"messages\": [\n"
         "      {\"role\": \"user\", \"content\": \"<detailed instruction/prompt>\"},\n"
-        "      {\"role\": \"model\", \"content\": \"<high-quality comprehensive expert response>\"}\n"
+        "      {\"role\": \"assistant\", \"content\": \"<high-quality comprehensive expert response>\"}\n"
         "    ]\n"
         "  }\n"
         "]"
@@ -325,7 +327,7 @@ def run_self_instruct_synthesis(args) -> List[Dict[str, Any]]:
         pipeline_obj, config_obj = init_hf_pipeline(args.model, not args.force_no_qlora)
         for b in range(1, num_batches + 1):
             config_obj.max_new_tokens=args.max_new_tokens
-            config_obj.temperatur=args.temperature
+            config_obj.temperature=args.temperature
             gen_kwargs = dict(generation_config=config_obj, streamer=TextStreamer(pipeline_obj.tokenizer))
 
             logger.info(f"Processing batch {b}/{num_batches}...")
@@ -363,7 +365,7 @@ if __name__ == "__main__":
     parser.add_argument("--model", type=str, default="google/gemma-4-31b-it", help="HF repository ID of the teacher model (used for Hugging Face backend)")
     parser.add_argument("--input", type=str, help="Path to TXT, JSON, or JSONL file containing seed prompts or categories")
     parser.add_argument("--output", type=str, default="./distilled_dataset.json", help="Path to write the generated fine-tuning dataset JSON file")
-    parser.add_argument("--system-prompt", type=str, default="You are an helpful, expert AI assistant. Provide extremely accurate, polished, and structured answers.", help="System instruction given to the teacher model during response generation")
+    parser.add_argument("--system-prompt", type=str, default="You are a helpful, expert AI assistant. Provide extremely accurate, polished, and structured answers.", help="System instruction given to the teacher model during response generation")
     parser.add_argument("--temperature", type=float, default=0.7, help="Generation temperature (higher values increase creativity/variance)")
     parser.add_argument("--max-new-tokens", type=int, default=1024, help="Max generation response length (tokens) per prompt")
     parser.add_argument("--num-samples", type=int, default=50, help="For 'synthesize' mode, total number of synthetic training samples to generate")
