@@ -25,6 +25,21 @@ except ImportError:
 from datasets import load_dataset
 from trl import SFTTrainer, SFTConfig
 
+
+def supports_bf16() -> bool:
+    """Checks bf16 support on the active accelerator (CUDA or Apple Silicon MPS).
+
+    torch.cuda.is_bf16_supported() only checks CUDA, so on MPS-only machines
+    (e.g. Apple Silicon Macs) it always reports False and training silently
+    falls back to fp16, which is more prone to NaN losses during QLoRA.
+    """
+    if torch.cuda.is_available():
+        return torch.cuda.is_bf16_supported()
+    if torch.backends.mps.is_available():
+        return torch.backends.mps.is_macos13_or_newer()
+    return False
+
+
 def load_model_and_processor(
     model_name: str,
     max_length: int,
@@ -70,10 +85,17 @@ def load_model_and_processor(
             # no target_modules — PEFT's Gemma 4 defaults scope to the LM layers
         )
     else:
-        from transformers import AutoModelForMultimodalLM, AutoProcessor
+        try:
+            from transformers import AutoModelForMultimodalLM, AutoProcessor
+        except ImportError as e:
+            raise ImportError(
+                "Failed to import the Gemma 4 multimodal processor. This usually means "
+                "`torchvision` is not installed (required by AutoProcessor/AutoModelForMultimodalLM "
+                "even for text-only fine-tuning). Please run: pip install torchvision"
+            ) from e
         from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 
-        torch_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        torch_dtype = torch.bfloat16 if supports_bf16() else torch.float16
 
         model_kwargs = dict(
             dtype=torch_dtype, # What torch dtype to use
@@ -295,8 +317,8 @@ def train(
             learning_rate=learning_rate,
             lr_scheduler_type="cosine",
             warmup_steps=int(total_steps * 0.03), # 3% warmup ratio
-            bf16=torch.cuda.is_bf16_supported(),
-            fp16=not torch.cuda.is_bf16_supported(),
+            bf16=supports_bf16(),
+            fp16=not supports_bf16(),
             eval_strategy="epoch",
             save_strategy="epoch",
             remove_unused_columns=False,                   # important for collator
