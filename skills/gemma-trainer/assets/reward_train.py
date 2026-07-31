@@ -31,7 +31,7 @@ def supports_bf16() -> bool:
     if torch.cuda.is_available():
         return torch.cuda.is_bf16_supported()
     if torch.backends.mps.is_available():
-        return torch.backends.mps.is_macos13_or_newer()
+        return torch.backends.mps.is_macos_or_newer(14, 0)
     return False
 
 
