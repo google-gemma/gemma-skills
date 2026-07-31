@@ -20,6 +20,21 @@ from trl import RewardTrainer, RewardConfig
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("gemma-reward-model")
 
+
+def supports_bf16() -> bool:
+    """Checks bf16 support on the active accelerator (CUDA or Apple Silicon MPS).
+
+    torch.cuda.is_bf16_supported() only checks CUDA, so on MPS-only machines
+    (e.g. Apple Silicon Macs) it always reports False and training silently
+    falls back to fp16, which is more prone to NaN losses during QLoRA.
+    """
+    if torch.cuda.is_available():
+        return torch.cuda.is_bf16_supported()
+    if torch.backends.mps.is_available():
+        return torch.backends.mps.is_macos_or_newer(14, 0)
+    return False
+
+
 def train_reward_model(
     model_name: str,
     dataset_path: str,
@@ -35,7 +50,7 @@ def train_reward_model(
 ):
     """Fine-tunes a Gemma sequence classification model as a Reward Model."""
 
-    torch_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    torch_dtype = torch.bfloat16 if supports_bf16() else torch.float16
 
     model_kwargs = dict(
         dtype=torch_dtype, # What torch dtype to use
@@ -98,8 +113,8 @@ def train_reward_model(
             per_device_eval_batch_size=batch_size,
             num_train_epochs=epochs,
             learning_rate=learning_rate,
-            bf16=torch.cuda.is_bf16_supported(),
-            fp16=not torch.cuda.is_bf16_supported(),
+            bf16=supports_bf16(),
+            fp16=not supports_bf16(),
             eval_strategy="epoch",
             save_strategy="epoch",
             max_length=max_length,
