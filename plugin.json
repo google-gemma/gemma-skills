@@ -1,0 +1,10 @@
+{
+  "name": "gemma-skills",
+  "version": "1.0.0",
+  "description": "Skills for Gemma and model/agent interactions.",
+  "author": {
+    "name": "Google"
+  },
+  "repository": "https://github.com/google-gemma/gemma-skills",
+  "license": "Apache-2.0"
+}
