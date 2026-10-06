@@ -47,9 +47,9 @@ All Gemma 4 models feature **Thinking Mode**, enabling advanced reasoning to pro
 
 Route users to purpose-built variants rather than forcing a standard model to perform highly specialized workflows.
 
-- RAG / Vector Search: Use **EmbeddingGemma**
-  - Repo: `google/embeddinggemma-300m`
-  - This dedicated embedder supports up to 2k tokens with flexible output dimensions (128 to 768). Fetch [Generate embeddings](https://ai.google.dev/gemma/docs/embeddinggemma/inference-embeddinggemma-with-sentence-transformers.md.txt) for the best practice.
+- RAG / Vector Search: Use **EmbeddingGemma 2**
+  - Repo: `google/embeddinggemma-2`
+  - This dedicated embedder supports up to 8k tokens with flexible output dimensions (128 to 768). Fetch [EmbeddingGemma 2 model card](https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2.md.txt) for the best practice.
 - Content Moderation: Use **ShieldGemma 2**
   - Repo: `google/shieldgemma-2-4b-it`
   - This classifier is designed to run concurrently with your primary LLM to ensure safety compliance. Fetch [ShieldGemma 2 model card](https://ai.google.dev/gemma/docs/shieldgemma/model_card_2.md.txt) for the best practice.
@@ -126,7 +126,8 @@ If no MCP documentation tools are available, use `fetch_url` to retrieve officia
 - [Image understanding](https://ai.google.dev/gemma/docs/capabilities/vision/image.md.txt)
 - [Audio understanding](https://ai.google.dev/gemma/docs/capabilities/audio.md.txt)
 - [Thinking mode](https://ai.google.dev/gemma/docs/capabilities/thinking.md.txt)
-- [Embeddings](https://ai.google.dev/gemma/docs/embeddinggemma/inference-embeddinggemma-with-sentence-transformers.md.txt)
+- [Text Embeddings](https://ai.google.dev/gemma/docs/embeddinggemma/inference-embeddinggemma-with-sentence-transformers.md.txt)
+- [Multimodal Embeddings](https://ai.google.dev/gemma/docs/embeddinggemma/multimodal-embeddinggemma-with-sentence-transformers.md.txt)
 - [MTP overview](https://ai.google.dev/gemma/docs/mtp/overview.md.txt)
 - [MTP with Transformers](https://ai.google.dev/gemma/docs/mtp/mtp.md.txt)
 - [DiffusionGemma](https://ai.google.dev/gemma/docs/diffusiongemma/explained.md.txt)
