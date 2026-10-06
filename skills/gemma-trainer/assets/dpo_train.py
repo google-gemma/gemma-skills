@@ -26,6 +26,21 @@ except ImportError:
 from datasets import load_dataset
 from trl import DPOTrainer, DPOConfig
 
+
+def supports_bf16() -> bool:
+    """Checks bf16 support on the active accelerator (CUDA or Apple Silicon MPS).
+
+    torch.cuda.is_bf16_supported() only checks CUDA, so on MPS-only machines
+    (e.g. Apple Silicon Macs) it always reports False and training silently
+    falls back to fp16, which is more prone to NaN losses during QLoRA.
+    """
+    if torch.cuda.is_available():
+        return torch.cuda.is_bf16_supported()
+    if torch.backends.mps.is_available():
+        return torch.backends.mps.is_macos_or_newer(14, 0)
+    return False
+
+
 def load_model_and_processor(
     base_model_name: str,
     adapter_path: str,
@@ -53,10 +68,17 @@ def load_model_and_processor(
         processor = get_chat_template(processor, chat_template="gemma-4")
 
     else:
-        from transformers import AutoModelForMultimodalLM, AutoProcessor
+        try:
+            from transformers import AutoModelForMultimodalLM, AutoProcessor
+        except ImportError as e:
+            raise ImportError(
+                "Failed to import the Gemma 4 multimodal processor. This usually means "
+                "`torchvision` is not installed (required by AutoProcessor/AutoModelForMultimodalLM "
+                "even for text-only fine-tuning). Please run: pip install torchvision"
+            ) from e
         from peft import PeftModel
 
-        torch_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+        torch_dtype = torch.bfloat16 if supports_bf16() else torch.float16
 
         model_kwargs = dict(
             dtype=torch_dtype, # What torch dtype to use
@@ -147,8 +169,8 @@ def train_dpo(
             per_device_eval_batch_size=batch_size,
             num_train_epochs=epochs,
             learning_rate=learning_rate,
-            bf16=torch.cuda.is_bf16_supported(),
-            fp16=not torch.cuda.is_bf16_supported(),
+            bf16=supports_bf16(),
+            fp16=not supports_bf16(),
             save_strategy="epoch",
             eval_strategy="epoch",
             max_length=max_length,
