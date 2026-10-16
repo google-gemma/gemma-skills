@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import sys
@@ -71,11 +72,14 @@ class DatasetPrepTests(unittest.TestCase):
         fake_transformers.AutoTokenizer = SimpleNamespace(
             from_pretrained=mock.Mock(return_value=self.Tokenizer())
         )
-        with tempfile.NamedTemporaryFile("w", suffix=".json", encoding="utf-8") as handle:
-            json.dump(dataset, handle)
-            handle.flush()
+        # A plain file in a temporary directory: Windows can't reopen an open
+        # NamedTemporaryFile, so validation would fail on file access instead.
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "dataset.json")
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(dataset, handle)
             with mock.patch.dict(sys.modules, {"transformers": fake_transformers}):
-                return self.module.run_validation(file_path=handle.name, **values)
+                return self.module.run_validation(file_path=path, **values)
 
     def test_empty_and_overlength_datasets_fail_closed(self):
         self.assertFalse(self.run_validation([]))
