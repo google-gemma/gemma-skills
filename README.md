@@ -11,7 +11,7 @@ Skills for the Gemma and model/agent interactions
 
 ## Installation
 
-You can browse and install skills using either the [Vercel skills CLI](https://skills.sh) or the [Context7 skills CLI](https://context7.com).
+You can install these skills across your preferred AI coding assistants and package managers:
 
 ### Using [Vercel skills CLI](https://skills.sh)
 
@@ -20,7 +20,7 @@ You can browse and install skills using either the [Vercel skills CLI](https://s
 npx skills add google-gemma/gemma-skills --list
 
 # Install a specific skill (e.g., gemma-dev).
-npx skills add google-gemma/gemma-skills --skill gemma-dev --global
+npx skills add google-gemma/gemma-skills --skill gemma-dev
 ```
 
 ### Using [Context7 skills CLI](https://context7.com)
@@ -31,6 +31,15 @@ npx ctx7 skills install /google-gemma/gemma-skills
 
 # Install a specific skill (e.g., gemma-dev).
 npx ctx7 skills install /google-gemma/gemma-skills gemma-dev
+```
+
+### Antigravity
+
+Install through the AGY CLI:
+
+```sh
+# Install it directly
+agy plugin install https://github.com/google-gemma/gemma-skills
 ```
 
 ## Disclaimer

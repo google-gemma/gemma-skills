@@ -22,6 +22,22 @@ from typing import List, Dict, Any
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("gemma-distill")
 
+
+def supports_bf16() -> bool:
+    """Checks bf16 support on the active accelerator (CUDA or Apple Silicon MPS).
+
+    torch.cuda.is_bf16_supported() only checks CUDA, so on MPS-only machines
+    (e.g. Apple Silicon Macs) it always reports False and generation silently
+    falls back to fp16.
+    """
+    import torch
+    if torch.cuda.is_available():
+        return torch.cuda.is_bf16_supported()
+    if torch.backends.mps.is_available():
+        return torch.backends.mps.is_macos_or_newer(14, 0)
+    return False
+
+
 def load_seed_prompts(input_path: str) -> List[str]:
     """Loads seed prompts from a TXT, JSON, or JSONL file."""
     if not os.path.exists(input_path):
@@ -92,7 +108,7 @@ def init_hf_pipeline(model_id: str, use_qlora):
 
     logger.info(f"Loading HF teacher model '{model_id}'...")
     
-    torch_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    torch_dtype = torch.bfloat16 if supports_bf16() else torch.float16
 
     model_kwargs = dict(
         dtype=torch_dtype, # What torch dtype to use
