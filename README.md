@@ -23,16 +23,6 @@ npx skills add google-gemma/gemma-skills --list
 npx skills add google-gemma/gemma-skills --skill gemma-dev
 ```
 
-### Using [Context7 skills CLI](https://context7.com)
-
-```sh
-# Interactively browse and install skills.
-npx ctx7 skills install /google-gemma/gemma-skills
-
-# Install a specific skill (e.g., gemma-dev).
-npx ctx7 skills install /google-gemma/gemma-skills gemma-dev
-```
-
 ### Antigravity
 
 Install through the AGY CLI:
