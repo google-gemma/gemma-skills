@@ -49,10 +49,10 @@ Route users to purpose-built variants rather than forcing a standard model to pe
 
 - RAG / Vector Search: Use **EmbeddingGemma 2**
   - Repo: `google/embeddinggemma-2`
-  - This dedicated embedder supports up to 8k tokens with flexible output dimensions (128 to 768). Fetch [EmbeddingGemma 2 model card](https://ai.google.dev/gemma/docs/embeddinggemma/model_card_2.md.txt) for the best practice.
+  - This dedicated embedder supports up to 8k tokens with flexible output dimensions (128 to 768). Fetch [EmbeddingGemma 2 model card](https://gemma.ai/models/embeddinggemma/model-card-v2.md.txt) for the best practice.
 - Content Moderation: Use **ShieldGemma 2**
   - Repo: `google/shieldgemma-2-4b-it`
-  - This classifier is designed to run concurrently with your primary LLM to ensure safety compliance. Fetch [ShieldGemma 2 model card](https://ai.google.dev/gemma/docs/shieldgemma/model_card_2.md.txt) for the best practice.
+  - This classifier is designed to run concurrently with your primary LLM to ensure safety compliance. Fetch [ShieldGemma 2 model card](https://gemma.ai/models/shieldgemma/model-card-v2.md.txt) for the best practice.
 
 
 ## 3. Deployment Workflows
@@ -65,7 +65,7 @@ Map the user's deployment goals to the correct tooling stack and best practices.
 - Apple Silicon (MLX): Recommend MLX when the user is on Mac Apple Silicon hardware. These configurations are optimized primarily for **Text** workflows.
   - Easy Path: Use [Ollama](https://ollama.com/library/gemma4/tags) with model tags like `gemma4:26b` or `gemma4:31b`.
   - Advanced Path: Use the `mlx-lm` package (`pip install mlx-lm`) for direct control, custom quantization, and fine-tuning (LoRA/QLoRA) via `mlx_lm.lora`.
-  - For more details, follow the [MLX integration guide](https://ai.google.dev/gemma/docs/integrations/mlx).
+  - For more details, follow the [MLX integration guide](https://gemma.ai/deployment/mlx.md.txt).
 
 ## 4. Speed Up Inference with Multi-Token Prediction (MTP)
 
@@ -82,7 +82,7 @@ Each Gemma 4 target model has a corresponding assistant model. The naming conven
   - `google/gemma-4-31B-it-assistant`
   - `google/gemma-4-26B-A4B-it-assistant`
 
-Fetch [MTP overview](https://ai.google.dev/gemma/docs/mtp/overview.md.txt) and [MTP with Transformers](https://ai.google.dev/gemma/docs/mtp/mtp.md.txt) for the best practice.
+Fetch [Speed-up Gemma 4 with Multi-Token Prediction](https://gemma.ai/get-started/capabilities/mtp.md.txt) for the best practice.
 
 ## 5. Quantization-Aware Training (QAT)
 
@@ -117,17 +117,17 @@ If the **`search_documentation`** tool (from the Google MCP server) is available
 
 If no MCP documentation tools are available, use `fetch_url` to retrieve official docs:
 
-1. Fetch the Index URL (`https://ai.google.dev/gemma/docs/llms.txt`) to discover available pages.
+1. Fetch the Index URL (`https://gemma.ai/llms.txt`) to discover available pages.
 2. Fetch specific pages as needed. Key reference pages include:
 
-- [Gemma 4 Prompt Formatting](https://ai.google.dev/gemma/docs/core/prompt-formatting-gemma4.md.txt)
-- [Text generation](https://ai.google.dev/gemma/docs/capabilities/text/basic.md.txt)
-- [Function calling](https://ai.google.dev/gemma/docs/capabilities/text/function-calling-gemma4.md.txt)
-- [Image understanding](https://ai.google.dev/gemma/docs/capabilities/vision/image.md.txt)
-- [Audio understanding](https://ai.google.dev/gemma/docs/capabilities/audio.md.txt)
-- [Thinking mode](https://ai.google.dev/gemma/docs/capabilities/thinking.md.txt)
-- [Text Embeddings](https://ai.google.dev/gemma/docs/embeddinggemma/inference-embeddinggemma-with-sentence-transformers.md.txt)
-- [Multimodal Embeddings](https://ai.google.dev/gemma/docs/embeddinggemma/multimodal-embeddinggemma-with-sentence-transformers.md.txt)
-- [MTP overview](https://ai.google.dev/gemma/docs/mtp/overview.md.txt)
-- [MTP with Transformers](https://ai.google.dev/gemma/docs/mtp/mtp.md.txt)
-- [DiffusionGemma](https://ai.google.dev/gemma/docs/diffusiongemma/explained.md.txt)
+- [Gemma 4 Best practices](https://gemma.ai/get-started/best-practices.md.txt)
+- [Gemma 4 Prompt Formatting](https://gemma.ai/get-started/prompt-formatting.md.txt)
+- [Text generation](https://gemma.ai/get-started/capabilities/text.md.txt)
+- [Function calling](https://gemma.ai/get-started/capabilities/function-calling.md.txt)
+- [Image understanding](https://gemma.ai/get-started/capabilities/image.md.txt)
+- [Audio understanding](https://gemma.ai/get-started/capabilities/audio.md.txt)
+- [Thinking mode](https://gemma.ai/get-started/capabilities/thinking.md.txt)
+- [Text Embeddings](https://gemma.ai/models/embeddinggemma/inference.md.txt)
+- [Multimodal Embeddings](https://gemma.ai/models/embeddinggemma/multimodal.md.txt)
+- [Speed-up Gemma 4 with Multi-Token Prediction](https://gemma.ai/get-started/capabilities/mtp.md.txt)
+- [DiffusionGemma](https://gemma.ai/models/diffusiongemma/explained.md.txt)
