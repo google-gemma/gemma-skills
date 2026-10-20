@@ -13,6 +13,7 @@ When training locally, memory efficiency and execution speed are huge. Always gu
 *   **Fall Back to TRL**: For multi-GPU environments (using DDP/FSDP) or when Unsloth is unavailable, use Hugging Face **TRL** (`SFTTrainer`, `DPOTrainer`) coupled with **PEFT** and **bitsandbytes** (for QLoRA).
 *   **Always use QLoRA (4-bit Quantization)**: Crucial for fitting Gemma models (like Gemma 4 12B/31B) into consumer VRAM.
 *   **Manage Context Window & Max Length**: Although Gemma 4 supports up to a 256K context window, recommend training with a context window of 2048 to 8192 tokens locally to prevent Out-Of-Memory (OOM) errors.
+*   **Treat the assets as starter scripts**: Pin package and model revisions for a real run, keep raw/generated datasets and checkpoints out of shared repositories, and validate with the exact tokenizer used for training. `--seed` makes splits and initialization repeatable, but GPU kernels can still be nondeterministic.
 
 ## 2. Choosing the Right Training Method
 
