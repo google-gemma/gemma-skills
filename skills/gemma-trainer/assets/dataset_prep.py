@@ -10,8 +10,12 @@ import os
 import argparse
 import json
 import logging
-from typing import List, Dict, Any, Union
-from transformers import AutoTokenizer
+from typing import List, Dict, Any
+
+try:
+    from transformers import AutoTokenizer
+except ImportError:
+    AutoTokenizer = None
 
 # Set up logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -102,7 +106,7 @@ def validate_dpo_item(item: Dict[str, Any], idx: int) -> bool:
         
     return True
 
-def validate_dpo_tokenization(item: Dict[str, Any], idx: int, tokenizer: AutoTokenizer) -> bool:
+def validate_dpo_tokenization(item: Dict[str, Any], idx: int, tokenizer: Any) -> bool:
     """
     Validates a DPO preference item to ensure tokenization consistency.
     Verifies that the standalone prompt tokens perfectly match the beginning
@@ -178,14 +182,14 @@ def run_validation(file_path: str, task_type: str, max_seq_length: int = 2048, t
     
     # Try importing transformers tokenizer if provided
     tokenizer = None
-    if tokenizer_name:
+    if tokenizer_name and AutoTokenizer is not None:
         try:
             logger.info(f"Loading tokenizer '{tokenizer_name}' for length checks...")
             tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        except ImportError:
-            logger.warning("transformers library not installed. Skipping precise token length checks (will use character count heuristic).")
         except Exception as e:
-            logger.error(f"Could not load tokenizer '{tokenizer_name}': {e}")
+            logger.warning(f"Could not load tokenizer '{tokenizer_name}': {e}. Using a character-count heuristic instead.")
+    elif tokenizer_name:
+        logger.warning("transformers is not installed. Using a character-count heuristic for sequence lengths.")
             
     long_sequences = 0
     
@@ -196,29 +200,36 @@ def run_validation(file_path: str, task_type: str, max_seq_length: int = 2048, t
         if task_type == "sft":
             is_valid = validate_sft_item(item, i)
             if is_valid:
-                sample_text_for_length = tokenizer.apply_chat_template(item["messages"], tokenize=False)
+                if tokenizer:
+                    sample_text_for_length = tokenizer.apply_chat_template(item["messages"], tokenize=False)
+                else:
+                    sample_text_for_length = json.dumps(item["messages"], ensure_ascii=False)
         elif task_type in ["dpo", "reward"]:
             is_valid = validate_dpo_item(item, i)
             if is_valid:
-                # Run the strict token consistency validation
-                is_token_consistent = validate_dpo_tokenization(item, i, tokenizer)
-                if not is_token_consistent:
-                    # You can choose to mark the item invalid, or just keep it as a warning
-                    logger.warning(f"Item {i} failed token alignment validation.")
+                if tokenizer:
+                    # Run the strict token consistency validation
+                    is_token_consistent = validate_dpo_tokenization(item, i, tokenizer)
+                    if not is_token_consistent:
+                        logger.warning(f"Item {i} failed token alignment validation.")
 
-                # Safe sequence length measurement using the full text
-                sample_text_for_length = tokenizer.apply_chat_template(
-                    [{"role": "user", "content": item["prompt"]}, {"role": "assistant", "content": item["chosen"]}],
-                    tokenize=False
-                )
+                    sample_text_for_length = tokenizer.apply_chat_template(
+                        [{"role": "user", "content": item["prompt"]}, {"role": "assistant", "content": item["chosen"]}],
+                        tokenize=False
+                    )
+                else:
+                    sample_text_for_length = f'{item["prompt"]}\n{item["chosen"]}'
                 
         if is_valid:
             logger.info(f"Item {i}: {sample_text_for_length}")
             valid_count += 1
             
             # Check length constraints
-            tokens = tokenizer.encode(sample_text_for_length)
-            num_tokens = len(tokens)
+            if tokenizer:
+                num_tokens = len(tokenizer.encode(sample_text_for_length))
+            else:
+                # A conservative local heuristic when the model tokenizer is unavailable.
+                num_tokens = max(1, (len(sample_text_for_length) + 3) // 4)
                 
             if num_tokens > max_seq_length:
                 long_sequences += 1
