@@ -7,30 +7,54 @@ LOCATION = os.environ.get("GOOGLE_CLOUD_LOCATION")
 ENDPOINT_ID = os.environ.get("GOOGLE_CLOUD_ENDPOINT_ID")
 
 MODEL_ID = "google/gemma-4-31B-it"
-tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+
 
 def predict_gemma(project: str, endpoint_id: str, prompt: str, location: str = "us-central1"):
     # Initialize the Vertex AI client
     aiplatform.init(project=project, location=location)
-    
+
     # Reference the deployed endpoint
     endpoint = aiplatform.Endpoint(endpoint_id)
-    
+
     # Format the payload for Gemma 4
     instances = [{"prompt": prompt, "max_tokens": 1024}]
-    
+
     # Generate prediction
     response = endpoint.predict(instances=instances)
-    
-    for prediction in response.predictions:
+
+    predictions = list(response.predictions)
+    for prediction in predictions:
         print(prediction)
+    return predictions
 
-question = input("User: ")
-messages = [
-    {"role": "user", "content": question}
-]
-prompt = tokenizer.apply_chat_template(
-    messages, tokenize=False, add_generation_prompt=True
-)
 
-predict_gemma(project=PROJECT_ID, location=LOCATION, endpoint_id=ENDPOINT_ID, prompt=prompt)
+def main():
+    missing = [
+        name
+        for name, value in (
+            ("GOOGLE_CLOUD_PROJECT", PROJECT_ID),
+            ("GOOGLE_CLOUD_LOCATION", LOCATION),
+            ("GOOGLE_CLOUD_ENDPOINT_ID", ENDPOINT_ID),
+        )
+        if not value
+    ]
+    if missing:
+        raise SystemExit(
+            f"Missing required environment variables: {', '.join(missing)}"
+        )
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+
+    question = input("User: ")
+    messages = [
+        {"role": "user", "content": question}
+    ]
+    prompt = tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+
+    predict_gemma(project=PROJECT_ID, location=LOCATION, endpoint_id=ENDPOINT_ID, prompt=prompt)
+
+
+if __name__ == "__main__":
+    main()
