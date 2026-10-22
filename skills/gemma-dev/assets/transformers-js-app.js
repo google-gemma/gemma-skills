@@ -21,7 +21,7 @@ async function initializeGemma() {
     console.log('Gemma model initialized!');
 }
 
-async function* generate(question) {
+async function generate(question) {
     const messages = [
         {role: 'user', content: question}
     ];
@@ -31,15 +31,30 @@ async function* generate(question) {
         add_generation_prompt: true,
     });
 
+    // Collect streamed tokens; TextStreamer alone does not return text,
+    // so without a callback the generation result would be discarded.
+    let streamedText = '';
     const streamer = new TextStreamer(generator.tokenizer, {
         skip_prompt: true, // Don't stream the user's prompt back
         skip_special_tokens: true,
+        callback_function: (chunk) => { streamedText += chunk; },
     });
 
-    await generator(prompt, {
+    const output = await generator(prompt, {
         max_new_tokens: 256,
         streamer: streamer,
     });
+
+    if (streamedText) {
+        return streamedText;
+    }
+
+    // Fallback: derive the reply from the pipeline return value.
+    const generated = Array.isArray(output) ? output[0]?.generated_text : output?.generated_text;
+    if (typeof generated === 'string') {
+        return generated.startsWith(prompt) ? generated.slice(prompt.length) : generated;
+    }
+    return '';
 }
 
 async function main() {
@@ -60,9 +75,7 @@ async function main() {
 
         console.log('\nGemma: ');
 
-        for await (const chunk of generate(question)) {
-            console.log(chunk);
-        }
+        console.log(await generate(question));
 
         console.log('\n');
     }
