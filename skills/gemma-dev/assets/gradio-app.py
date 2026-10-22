@@ -13,6 +13,24 @@ pipe = pipeline(
     dtype="auto",
 )
 
+def extract_text_content(content):
+    """Extract plain text from a Gradio message content block.
+
+    Content can be a plain string or a list of blocks (text, image uploads,
+    file references, ...). Only text blocks contribute; anything else is
+    skipped so a non-text block never breaks the chat request.
+    """
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "text":
+                continue
+            text = item.get("text")
+            if isinstance(text, str):
+                parts.append(text)
+        return "".join(parts)
+    return content if isinstance(content, str) else ""
+
 def chat(message, history):
     messages = []
 
@@ -21,10 +39,7 @@ def chat(message, history):
         role = msg["role"]
 
         # Extract text from the content list (e.g. [{'text': 'hello', 'type': 'text'}])
-        if isinstance(msg["content"], list):
-            content_text = "".join([item["text"] for item in msg["content"] if item["type"] == "text"])
-        else:
-            content_text = msg["content"]
+        content_text = extract_text_content(msg["content"])
 
         messages.append({"role": role, "content": content_text})
 
