@@ -100,7 +100,91 @@ Official Hugging Face collections:
 - **`collections/google/gemma-4-qat-q4_0`**: Contains `-unquantized`/`-assistant` (E2B, E4B, 12B, 26B A4B, 31B), `-gguf` (E2B, E4B, 12B, 26B A4B, 31B), and `-w4a16-ct` (E2B, E4B, 12B, 31B).
 - **`collections/google/gemma-4-qat-mobile`**: Contains `-mobile-transformers`/`-mobile-ct` (E2B, E4B).
 
-## 6. Documentation Lookup
+## 6. Mobile On-Device Deployment
+
+Use this section when the user is deploying Gemma natively to an Android or iOS device. Do **not** apply this guidance to browser (Transformers.js) or server deployments.
+
+### 6.1 Model Choice for Mobile
+
+Gemma 4 **E2B** and **E4B** are the primary candidates for on-device mobile deployment. They are designed for NPU acceleration and support text, image, and audio inputs within a 128 K-token context window. Their smaller parameter counts and official QAT-mobile artifact formats make them feasible on capable consumer devices.
+
+> [!IMPORTANT]
+> "Feasible" depends on the specific device, OS version, runtime, and model artifact. Always verify current model and runtime support against the official documentation before recommending a specific configuration. Do not assume a model that runs on one device class will run acceptably on another.
+
+Gemma 3 1B (`gemma-3-1b-it`) remains an option for text-only tasks on severely memory-constrained hardware, but check that your chosen runtime supports it before recommending it.
+
+### 6.2 Native Runtime: LiteRT-LM
+
+For **native** Android and iOS apps, the recommended runtime is **LiteRT-LM** (Google AI Edge). LiteRT-LM loads `.litertlm` model bundles — a packaged format that combines optimized model weights, tokenizer data, and KV-cache configuration. This is distinct from Transformers.js (browser/Node), GGUF (llama.cpp), or safetensors checkpoints.
+
+- **Android (Kotlin / Java):** Follow the [Get started with LiteRT-LM on Android](https://ai.google.dev/edge/litert/litert-lm/get-started-android) guide. Add the Gradle dependency `com.google.ai.edge.litertlm:litertlm-android` and use the `InferenceModel` / `sendMessageAsync` API. Hardware acceleration targets include CPU (XNNPACK), GPU, and NPU delegates (Google Tensor, Qualcomm AI Engine Direct, MediaTek NeuroPilot) — check the [LiteRT-LM overview](https://ai.google.dev/edge/litert/litert-lm/overview) for the current list of supported delegates.
+- **iOS (Swift):** Follow the [LiteRT-LM iOS guide](https://ai.google.dev/edge/litert/litert-lm/get-started-ios). Add the package via Swift Package Manager (`https://github.com/google-ai-edge/LiteRT-LM`) and initialize with `EngineConfig`, selecting `.gpu` (Metal) or `.cpu` as the backend.
+
+> [!NOTE]
+> GGUF binaries (llama.cpp), `-qat-mobile-transformers` weights (Hugging Face Transformers), and `.litertlm` bundles (LiteRT-LM) are **not interchangeable**. Select the artifact format that matches your chosen runtime before downloading or shipping weights.
+
+### 6.3 Quantization and Artifact Format Compatibility
+
+Each runtime requires a specific artifact format. Recommending the wrong format will prevent the model from loading or cause silent quality degradation.
+
+| Runtime | Artifact suffix | Notes |
+|---------|----------------|-------|
+| LiteRT-LM (Android / iOS) | `.litertlm` pre-converted bundle | Obtain from the official model page; not a raw safetensors checkpoint |
+| Hugging Face Transformers (Python) | `-qat-mobile-transformers` | 2-bit decoding layers, static activations, optimized KV cache; E2B and E4B only |
+| vLLM / SGLang (server) | `-qat-mobile-ct` | Compressed tensors for server-side mobile-targeted inference |
+| llama.cpp / LM Studio | `-qat-q4_0-gguf` | GGUF binary; not suitable for LiteRT-LM |
+
+Always confirm format availability in `collections/google/gemma-4-qat-mobile` on Hugging Face before specifying a variant.
+
+### 6.4 Realistic Device Expectations
+
+A model's maximum context window (128 K tokens for E2B/E4B) is a hardware ceiling, not a sensible default for every phone. Actual usable context is constrained by available RAM, peak memory during inference, and thermal headroom.
+
+**Do not invent universal limits.** Memory availability, safe context lengths, latency, and battery impact vary across device generations, SoC families, and OS versions. Instead:
+
+- **Measure on the lowest-spec supported device** — this is the only reliable way to establish actual limits for a given model + runtime + quantization combination.
+- **Profile these metrics during development:**
+  - Cold-start and warm-start time (model load to first token)
+  - Peak RAM usage across the full memory footprint (see §6.5)
+  - Token generation latency (tokens/sec) at your target context length
+  - Sustained thermal behaviour during a realistic usage session
+  - Battery drain under inference load
+
+Publish your measured limits in your app's documentation rather than citing theoretical maximums.
+
+### 6.5 Full Memory Footprint
+
+The total on-device memory budget includes all of the following, not just model weights:
+
+- **Model weights** — the quantized checkpoint loaded into memory (e.g., ~0.8–1 GB for E2B with `-qat-mobile-transformers` at QAT mobile quantization, but verify for your specific artifact and device)
+- **KV cache** — grows with active context length; the runtime manages this, but it is a significant variable cost per session
+- **Activations and runtime buffers** — intermediate tensors allocated during the forward pass
+- **Multimodal inputs** — image and audio inputs temporarily increase memory pressure during encoding
+- **App process** — your application's own heap, UI layer, and any concurrent services
+
+> [!CAUTION]
+> Exceeding available physical RAM causes the OS to kill your app's process on both Android and iOS. Always leave headroom for the OS and other foreground processes. Measure peak memory under realistic multi-turn conversation loads, not just single-turn prompts.
+
+### 6.6 Responsiveness and Resource Lifecycle
+
+Follow the runtime documentation for lifecycle management to avoid resource leaks and keep the UI responsive:
+
+- Run inference off the main thread. On Android, use coroutines or `Executor`-based dispatch; on iOS, use Swift `async`/`await`. Both LiteRT-LM APIs are asynchronous by design — do not block the UI thread.
+- Stream tokens to the UI as they arrive (both platforms support streaming callbacks) rather than waiting for the complete response.
+- Close and release the inference engine when the user navigates away or the app moves to background. Holding model weights in memory during background operation increases the likelihood of process termination by the OS memory manager.
+- Consult the [LiteRT-LM Android guide](https://ai.google.dev/edge/litert/litert-lm/get-started-android) and [LiteRT-LM iOS guide](https://ai.google.dev/edge/litert/litert-lm/get-started-ios) for the current API for session teardown and engine disposal.
+
+### 6.7 Mobile Agent Safety
+
+When building on-device agents that call tools or take actions on the user's behalf:
+
+- **Narrow, app-defined tools only.** Define only the tools the app genuinely needs. Do not expose a general shell, file system, or network interface to the model.
+- **Respect platform permissions.** Access to contacts, location, camera, microphone, calendar, and health data is gated by OS permissions. Request only what is needed, and verify at runtime that permission was granted before passing data to the model or allowing tool calls that use it.
+- **Validate arguments and authorize actions.** The model's output is untrusted input. Validate tool-call arguments against an allowlist of known-good values and enforce authorization checks in your app code before executing any sensitive action.
+- **Require explicit user confirmation** for irreversible or sensitive actions (sending a message, making a purchase, deleting data). Do not let the model invoke these autonomously without a clear user-visible prompt and confirmation step.
+- **Treat model output as untrusted.** Apply the same input-validation discipline to strings returned by the model as you would to data received from an external network service. Sanitize before rendering in UI or passing to other system APIs.
+
+## 7. Documentation Lookup
 
 ### When MCP is Installed (Preferred)
 
