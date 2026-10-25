@@ -22,7 +22,7 @@ def chat(message, history):
 
         # Extract text from the content list (e.g. [{'text': 'hello', 'type': 'text'}])
         if isinstance(msg["content"], list):
-            content_text = "".join([item["text"] for item in msg["content"] if item["type"] == "text"])
+            content_text = "".join([item.get("text", "") for item in msg["content"] if item.get("type") == "text"])
         else:
             content_text = msg["content"]
 
