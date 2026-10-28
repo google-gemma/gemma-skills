@@ -1,43 +1,58 @@
 #!/usr/bin/env python3
-"""
-Gemma Supervised Fine-Tuning (SFT) Script
-This script fine-tunes Gemma models on local environments using Unsloth (for maximum 
-efficiency on single GPUs) or standard Hugging Face PEFT + TRL (fallback).
+"""Gemma Supervised Fine-Tuning (SFT) Script.
+
+This script fine-tunes Gemma models on local environments using Unsloth (for
+maximum efficiency on single GPUs) or standard Hugging Face PEFT + TRL
+(fallback).
 """
 
-import torch
+import argparse
+from collections.abc import Callable, Sequence
+import importlib
 import logging
+from typing import Any
+
+import datasets
 import numpy as np
+import torch
 
 # Configure logging
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 logger = logging.getLogger("gemma-sft")
 
 # Attempt to import Unsloth for high-performance single-GPU training
+# (must run before importing trl, transformers, or peft)
 try:
-    from unsloth import FastModel
-    HAS_UNSLOTH = True
-    logger.info("Unsloth library detected! Will use optimized single-GPU training.")
+  importlib.import_module("unsloth")
+  HAS_UNSLOTH = True
+  logger.info(
+      "Unsloth library detected! Will use optimized single-GPU training."
+  )
 except ImportError:
-    HAS_UNSLOTH = False
-    logger.info("Unsloth not found. Falling back to standard Hugging Face PEFT + TRL.")
-
-from datasets import load_dataset
-from trl import SFTTrainer, SFTConfig
+  HAS_UNSLOTH = False
+  logger.info(
+      "Unsloth not found. Falling back to standard Hugging Face PEFT + TRL."
+  )
 
 
 def supports_bf16() -> bool:
-    """Checks bf16 support on the active accelerator (CUDA or Apple Silicon MPS).
+  """Checks bf16 support on the active accelerator (CUDA or Apple Silicon MPS).
 
-    torch.cuda.is_bf16_supported() only checks CUDA, so on MPS-only machines
-    (e.g. Apple Silicon Macs) it always reports False and training silently
-    falls back to fp16, which is more prone to NaN losses during QLoRA.
-    """
-    if torch.cuda.is_available():
-        return torch.cuda.is_bf16_supported()
-    if torch.backends.mps.is_available():
-        return torch.backends.mps.is_macos_or_newer(14, 0)
-    return False
+  torch.cuda.is_bf16_supported() only checks CUDA, so on MPS-only machines
+  (e.g. Apple Silicon Macs) it always reports False and training silently
+  falls back to fp16, which is more prone to NaN losses during QLoRA.
+
+  Returns:
+    True if bf16 is supported on the active accelerator, False otherwise.
+  """
+  if torch.cuda.is_available():
+    major, minor = torch.cuda.get_device_capability()
+    return major >= 8
+  if torch.backends.mps.is_available():
+    return torch.backends.mps.is_macos_or_newer(14, 0)
+  return False
 
 
 def load_model_and_processor(
@@ -47,227 +62,250 @@ def load_model_and_processor(
     lora_alpha: int,
     use_unsloth: bool,
     use_qlora: bool,
-):
-    """Loads model and processor, configuring LoRA using either Unsloth or standard HF PEFT."""
-    # Determine reference IT model for processor fallback if base PT model is used
-    processor_model_id = model_name if "-it" in model_name else f"{model_name}-it"
-    fallback_model_id = "google/gemma-4-E2B-it"
+) -> tuple[Any, Any]:
+  """Loads model and processor, configuring LoRA via Unsloth or HF PEFT."""
+  # Determine reference IT model for processor fallback if base PT model is used
+  processor_model_id = model_name if "-it" in model_name else f"{model_name}-it"
+  fallback_model_id = "google/gemma-4-E2B-it"
 
-    if use_unsloth:
-        if not HAS_UNSLOTH:
-            raise RuntimeError("Unsloth is requested but not installed.")
+  if use_unsloth:
+    if not HAS_UNSLOTH:
+      raise RuntimeError("Unsloth is requested but not installed.")
 
-        logger.info(f"Loading {model_name} with Unsloth...")
-        model, processor = FastModel.from_pretrained(
-            model_name=model_name,
-            max_seq_length=max_length,
-            dtype=None,  # Auto-detection
-            load_in_4bit=use_qlora,  # Enable QLoRA
-            full_finetuning=False,
-            use_gradient_checkpointing="unsloth",  # Saves immense VRAM
-        )
+    unsloth = importlib.import_module("unsloth")
+    chat_templates = importlib.import_module("unsloth.chat_templates")
 
-        from unsloth.chat_templates import get_chat_template
-        processor = get_chat_template(processor, chat_template="gemma-4")
+    logger.info("Loading %s with Unsloth...", model_name)
+    model, processor = unsloth.FastModel.from_pretrained(
+        model_name=model_name,
+        max_seq_length=max_length,
+        dtype=None,  # Auto-detection
+        load_in_4bit=use_qlora,  # Enable QLoRA
+        full_finetuning=False,
+        use_gradient_checkpointing="unsloth",  # Saves immense VRAM
+    )
 
-        logger.info("Configuring LoRA adapters...")
-        model = FastModel.get_peft_model(
-            model,
-            finetune_vision_layers     = True, # False if not finetuning vision layers
-            finetune_language_layers   = True, # False if not finetuning language layers
-            finetune_attention_modules = True, # False if not finetuning attention layers
-            finetune_mlp_modules       = True, # False if not finetuning MLP layers
+    processor = chat_templates.get_chat_template(
+        processor, chat_template="gemma-4"
+    )
 
-            r=lora_r,
-            lora_alpha=lora_alpha,
-            lora_dropout=0,  # Unsloth optimized setting
-            bias="none",
-            # no target_modules — PEFT's Gemma 4 defaults scope to the LM layers
-        )
-    else:
-        try:
-            from transformers import AutoModelForMultimodalLM, AutoProcessor
-        except ImportError as e:
-            raise ImportError(
-                "Failed to import the Gemma 4 multimodal processor. This usually means "
-                "`torchvision` is not installed (required by AutoProcessor/AutoModelForMultimodalLM "
-                "even for text-only fine-tuning). Please run: pip install torchvision"
-            ) from e
-        from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
+    logger.info("Configuring LoRA adapters...")
+    model = unsloth.FastModel.get_peft_model(
+        model,
+        finetune_vision_layers=True,  # False if not finetuning vision layers
+        # False if not finetuning language layers
+        finetune_language_layers=True,
+        # False if not finetuning attention layers
+        finetune_attention_modules=True,
+        finetune_mlp_modules=True,  # False if not finetuning MLP layers
+        r=lora_r,
+        lora_alpha=lora_alpha,
+        lora_dropout=0,  # Unsloth optimized setting
+        bias="none",
+        # no target_modules — PEFT's Gemma 4 defaults scope to the LM layers
+    )
+  else:
+    try:
+      transformers = importlib.import_module("transformers")
+      auto_model_cls = transformers.AutoModelForMultimodalLM
+      auto_processor_cls = transformers.AutoProcessor
+    except (ImportError, AttributeError) as e:
+      raise ImportError(
+          "Failed to import the Gemma 4 multimodal processor. This usually"
+          " means `torchvision` is not installed (required by"
+          " AutoProcessor/AutoModelForMultimodalLM even for text-only"
+          " fine-tuning). Please run: pip install torchvision"
+      ) from e
+    peft = importlib.import_module("peft")
 
-        torch_dtype = torch.bfloat16 if supports_bf16() else torch.float16
+    torch_dtype = torch.bfloat16 if supports_bf16() else torch.float16
 
-        model_kwargs = dict(
-            dtype=torch_dtype, # What torch dtype to use
-            device_map="auto", # Let torch decide how to load the model
-        )
+    model_kwargs: dict[str, Any] = dict(
+        dtype=torch_dtype,  # What torch dtype to use
+        device_map="auto",  # Let torch decide how to load the model
+    )
 
-        if use_qlora:
-            from transformers import BitsAndBytesConfig
-            model_kwargs["quantization_config"] = BitsAndBytesConfig(
-                load_in_4bit=True,
-                bnb_4bit_use_double_quant=True,
-                bnb_4bit_quant_type='nf4',
-                bnb_4bit_compute_dtype=torch_dtype,
-                bnb_4bit_quant_storage=torch_dtype,
-            )
+    if use_qlora:
+      model_kwargs["quantization_config"] = transformers.BitsAndBytesConfig(
+          load_in_4bit=True,
+          bnb_4bit_use_double_quant=True,
+          bnb_4bit_quant_type="nf4",
+          bnb_4bit_compute_dtype=torch_dtype,
+          bnb_4bit_quant_storage=torch_dtype,
+      )
 
-            # === FIXED AUDIO DATA TYPE PATCH ===
-            _original_masked_scatter = torch.Tensor.masked_scatter
+      # === FIXED AUDIO DATA TYPE PATCH ===
+      _original_masked_scatter = torch.Tensor.masked_scatter
 
-            def _patched_masked_scatter(self, mask, source):
-                if self.dtype != source.dtype:
-                    source = source.to(self.dtype)
-                return _original_masked_scatter(self, mask, source)
+      def _patched_masked_scatter(self, mask, source):
+        if self.dtype != source.dtype:
+          source = source.to(self.dtype)
+        return _original_masked_scatter(self, mask, source)
 
-            torch.Tensor.masked_scatter = _patched_masked_scatter
-            # ===================================
+      torch.Tensor.masked_scatter = _patched_masked_scatter
+      # ===================================
 
-        # Load model & processor
-        try:
-            logger.info(f"Loading processor config from {processor_model_id}...")
-            processor = AutoProcessor.from_pretrained(processor_model_id)
-        except OSError:
-            logger.warning(f"Failed to load {processor_model_id}. Falling back to {fallback_model_id}.")
-            processor = AutoProcessor.from_pretrained(fallback_model_id)
-        
-        logger.info(f"Loading base model weights from {model_name}...")        
-        model = AutoModelForMultimodalLM.from_pretrained(
-            model_name,
-            **model_kwargs
-        )
+    # Load model & processor
+    try:
+      logger.info("Loading processor config from %s...", processor_model_id)
+      processor = auto_processor_cls.from_pretrained(processor_model_id)
+    except OSError:
+      logger.warning(
+          "Failed to load %s. Falling back to %s.",
+          processor_model_id,
+          fallback_model_id,
+      )
+      processor = auto_processor_cls.from_pretrained(fallback_model_id)
 
-        # Prepare model for QLoRA training
-        if use_qlora:
-            model = prepare_model_for_kbit_training(model)
+    logger.info("Loading base model weights from %s...", model_name)
+    model = auto_model_cls.from_pretrained(model_name, **model_kwargs)
 
-        # Configure LoRA
-        peft_config = LoraConfig(
-            r=lora_r,
-            lora_alpha=lora_alpha,
-            lora_dropout=0.05,
-            bias="none",
-            task_type="CAUSAL_LM",
-            # no target_modules — PEFT's Gemma 4 defaults scope to the LM layers
-        )
-        model = get_peft_model(model, peft_config)
+    # Prepare model for QLoRA training
+    if use_qlora:
+      model = peft.prepare_model_for_kbit_training(model)
 
-    return model, processor
+    # Configure LoRA
+    peft_config = peft.LoraConfig(
+        r=lora_r,
+        lora_alpha=lora_alpha,
+        lora_dropout=0.05,
+        bias="none",
+        task_type="CAUSAL_LM",
+        # no target_modules — PEFT's Gemma 4 defaults scope to the LM layers
+    )
+    model = peft.get_peft_model(model, peft_config)
 
-def get_collate_fn(processor):
-    """Creates a custom data collator that masks user prompts in loss computation."""
-    def collate_fn(examples):
-        texts = []
-        audios = []
-        images = []
+  return model, processor
 
-        # Check if ANY example in the entire batch actually contains audio
-        batch_has_audio = False
-        for example in examples:
-            for message in example.get("messages", []):
-                content = message.get("content", [])
-                if isinstance(content, list):
-                    if any(isinstance(b, dict) and b.get("type") == "audio" for b in content):
-                        batch_has_audio = True
-                        break
 
-        if batch_has_audio:
-            try:
-                import librosa
-            except ImportError:
-                raise ImportError(
-                    "Your dataset contains audio blocks, but `librosa` is not installed. "
-                    "Please install librosa using `pip install librosa` to train on audio data."
-                )
+def get_collate_fn(
+    processor: Any,
+) -> Callable[[Sequence[dict[str, Any]]], Any]:
+  """Creates a custom data collator that masks user prompts in loss."""
 
-        for example in examples:
-            messages = example.get("messages", [])
+  def collate_fn(examples: Sequence[dict[str, Any]]) -> Any:
+    texts = []
+    audios = []
+    images = []
 
-            full_text = processor.apply_chat_template(
-                messages, add_generation_prompt=False, tokenize=False
-            )
-            texts.append(full_text.strip())
+    # Check if ANY example in the entire batch actually contains audio
+    batch_has_audio = False
+    for example in examples:
+      for message in example.get("messages", []):
+        content = message.get("content", [])
+        if isinstance(content, list):
+          if any(
+              isinstance(b, dict) and b.get("type") == "audio" for b in content
+          ):
+            batch_has_audio = True
+            break
 
-            # images can be nested, not for audio
-            example_images = []
-            example_audio = np.zeros(1, dtype=np.float32) if batch_has_audio else None
+    librosa = None
+    if batch_has_audio:
+      try:
+        librosa = importlib.import_module("librosa")
+      except ImportError as exc:
+        raise ImportError(
+            "Your dataset contains audio blocks, but `librosa` is not"
+            " installed. Please install librosa using `pip install librosa` to"
+            " train on audio data."
+        ) from exc
 
-            for message in messages:
-                content = message.get("content", [])
-                if isinstance(content, list):
-                    for block in content:
-                        if not isinstance(block, dict):
-                            continue
+    for example in examples:
+      messages = example.get("messages", [])
 
-                        if block.get("type") == "audio":
-                            audio_path = block.get("audio") or block.get("url")
+      full_text = processor.apply_chat_template(
+          messages, add_generation_prompt=False, tokenize=False
+      )
+      texts.append(full_text.strip())
 
-                            try:
-                                audio_array, sr = librosa.load(audio_path, sr=16000, mono=True)
-                                if audio_array.ndim > 1:
-                                    audio_array = audio_array.squeeze()
+      # images can be nested, not for audio
+      example_images = []
+      example_audio = np.zeros(1, dtype=np.float32) if batch_has_audio else None
 
-                                example_audio = audio_array
-                            except Exception as e:
-                                print(f"Error loading audio file {audio_path}: {e}")
-                                example_audio = np.zeros(1, dtype=np.float32)
+      for message in messages:
+        content = message.get("content", [])
+        if isinstance(content, list):
+          for block in content:
+            if not isinstance(block, dict):
+              continue
 
-                        elif block.get("type") == "image":
-                            image_path = block.get("image") or block.get("url")
-                            if image_path:
-                                example_images.append(image_path)
+            if block.get("type") == "audio" and librosa is not None:
+              audio_path = block.get("audio") or block.get("url")
 
-            images.append(example_images)
-            if batch_has_audio:
-                audios.append(example_audio)
+              try:
+                audio_array, _ = librosa.load(audio_path, sr=16000, mono=True)
+                if audio_array.ndim > 1:
+                  audio_array = audio_array.squeeze()
 
-        processor_kwargs = {
-            "text": texts,
-            "return_tensors": "pt",
-            "padding": True
-        }
+                example_audio = audio_array
+              except (
+                  OSError,
+                  EOFError,
+                  ValueError,
+                  RuntimeError,
+                  TypeError,
+              ) as e:
+                print(f"Error loading audio file {audio_path}: {e}")
+                example_audio = np.zeros(1, dtype=np.float32)
 
-        if batch_has_audio:
-            processor_kwargs["audio"] = audios
-        if any(len(img_list) > 0 for img_list in images):
-            processor_kwargs["images"] = images
+            elif block.get("type") == "image":
+              image_path = block.get("image") or block.get("url")
+              if image_path:
+                example_images.append(image_path)
 
-        # Tokenize the texts
-        batch = processor(**processor_kwargs)
+      images.append(example_images)
+      if batch_has_audio:
+        audios.append(example_audio)
 
-        # The labels are the input_ids, and we mask the padding tokens in the loss computation
-        labels = batch["input_ids"].clone()
+    processor_kwargs = {"text": texts, "return_tensors": "pt", "padding": True}
 
-        target_phrase = "<|turn>model\n"
-        target_tokens = processor.tokenizer.encode(target_phrase, add_special_tokens=False)
-        target_len = len(target_tokens)
+    if batch_has_audio:
+      processor_kwargs["audio"] = audios
+    if any(len(img_list) > 0 for img_list in images):
+      processor_kwargs["images"] = images
 
-        for i in range(labels.size(0)):
-            row_tokens = batch["input_ids"][i].tolist()
+    # Tokenize the texts
+    batch = processor(**processor_kwargs)
 
-            # Find where the assistant block begins
-            assistant_start_idx = None
-            for idx in range(len(row_tokens) - target_len + 1):
-                if row_tokens[idx : idx + target_len] == target_tokens:
-                    # We want to keep loss calculation on the assistant transcription tokens,
-                    # so we move the index right past the assistant header ('<|turn>model\n')
-                    assistant_start_idx = idx + target_len
-                    break
+    # The labels are the input_ids, and we mask the padding tokens in the loss
+    # computation
+    labels = batch["input_ids"].clone()
 
-            if assistant_start_idx is not None:
-                labels[i, :assistant_start_idx] = -100
-            else:
-                # Fallback safety: if template matching fails for an anomalous row, mask padding anyway
-                labels[i, labels[i] == processor.tokenizer.pad_token_id] = -100
+    target_phrase = "<|turn>model\n"
+    target_tokens = processor.tokenizer.encode(
+        target_phrase, add_special_tokens=False
+    )
+    target_len = len(target_tokens)
 
-        # Mask tokens for not being used in the loss computation
-        labels[labels == processor.tokenizer.pad_token_id] = -100
+    for i in range(labels.size(0)):
+      row_tokens = batch["input_ids"][i].tolist()
 
-        batch["labels"] = labels
+      # Find where the assistant block begins
+      assistant_start_idx = None
+      for idx in range(len(row_tokens) - target_len + 1):
+        if row_tokens[idx : idx + target_len] == target_tokens:
+          # We want to keep loss calculation on the assistant transcription
+          # tokens, so we move the index right past the assistant header
+          # ('<|turn>model\n')
+          assistant_start_idx = idx + target_len
+          break
 
-        return batch
+      if assistant_start_idx is not None:
+        labels[i, :assistant_start_idx] = -100
+      else:
+        # Fallback safety: if template matching fails for an anomalous row,
+        # mask padding anyway
+        labels[i, labels[i] == processor.tokenizer.pad_token_id] = -100
 
-    return collate_fn
+    # Mask tokens for not being used in the loss computation
+    labels[labels == processor.tokenizer.pad_token_id] = -100
+
+    batch["labels"] = labels
+
+    return batch
+
+  return collate_fn
 
 
 def train(
@@ -283,96 +321,138 @@ def train(
     learning_rate: float,
     use_unsloth: bool,
     use_qlora: bool,
-):
-    """Unified training runner for SFT using SFTConfig."""
-    model, processor = load_model_and_processor(
-        model_name=model_name,
-        max_length=max_length,
-        lora_r=lora_r,
-        lora_alpha=lora_alpha,
-        use_unsloth=use_unsloth,
-        use_qlora=use_qlora,
-    )
+) -> None:
+  """Unified training runner for SFT using SFTConfig."""
+  trl = importlib.import_module("trl")
 
-    # Load and format dataset
-    logger.info(f"Loading dataset from {dataset_path}...")
-    dataset = load_dataset("json", data_files=dataset_path, split="train").train_test_split(test_size=test_size)
+  model, processor = load_model_and_processor(
+      model_name=model_name,
+      max_length=max_length,
+      lora_r=lora_r,
+      lora_alpha=lora_alpha,
+      use_unsloth=use_unsloth,
+      use_qlora=use_qlora,
+  )
 
-    collate_fn = get_collate_fn(processor)
-    total_steps = (len(dataset['train']) // batch_size) * epochs
+  # Load and format dataset
+  logger.info("Loading dataset from %s...", dataset_path)
+  dataset = datasets.load_dataset(
+      "json", data_files=dataset_path, split="train"
+  ).train_test_split(test_size=test_size)
 
-    # Configure trainer
-    logger.info("Initializing SFTTrainer...")
-    trainer = SFTTrainer(
-        model=model,
-        processing_class=processor,
-        train_dataset=dataset["train"],
-        eval_dataset=dataset["test"],
-        data_collator=collate_fn,
-        args=SFTConfig(
-            output_dir=output_dir,
-            per_device_train_batch_size=batch_size,
-            per_device_eval_batch_size=batch_size,
-            num_train_epochs=epochs,
-            learning_rate=learning_rate,
-            lr_scheduler_type="cosine",
-            warmup_steps=int(total_steps * 0.03), # 3% warmup ratio
-            bf16=supports_bf16(),
-            fp16=not supports_bf16(),
-            eval_strategy="epoch",
-            save_strategy="epoch",
-            remove_unused_columns=False,                   # important for collator
-            dataset_kwargs={"skip_prepare_dataset": True}, # important for collator
-            max_length=max_length,
-            load_best_model_at_end=True,
-            metric_for_best_model="eval_loss", # track loss, not accuracy
-            greater_is_better=False,           # Lower loss is better
-        ),
-    )
+  collate_fn = get_collate_fn(processor)
+  total_steps = (len(dataset["train"]) // batch_size) * epochs
 
-    # Start Training
-    logger.info(f"Starting {'Unsloth' if use_unsloth else 'standard HF'} training run...")
-    trainer_stats = trainer.train()
-    logger.info(f"Training completed. Stats: {trainer_stats}")
+  # Configure trainer
+  logger.info("Initializing SFTTrainer...")
+  trainer = trl.SFTTrainer(
+      model=model,
+      processing_class=processor,
+      train_dataset=dataset["train"],
+      eval_dataset=dataset["test"],
+      data_collator=collate_fn,
+      args=trl.SFTConfig(
+          output_dir=output_dir,
+          per_device_train_batch_size=batch_size,
+          per_device_eval_batch_size=batch_size,
+          num_train_epochs=epochs,
+          learning_rate=learning_rate,
+          lr_scheduler_type="cosine",
+          warmup_steps=int(total_steps * 0.03),  # 3% warmup ratio
+          bf16=supports_bf16(),
+          fp16=not supports_bf16(),
+          eval_strategy="epoch",
+          save_strategy="epoch",
+          remove_unused_columns=False,  # important for collator
+          dataset_kwargs={
+              "skip_prepare_dataset": True
+          },  # important for collator
+          max_length=max_length,
+          load_best_model_at_end=True,
+          metric_for_best_model="eval_loss",  # track loss, not accuracy
+          greater_is_better=False,  # Lower loss is better
+      ),
+  )
 
-    # Save model/adapters
-    logger.info(f"Saving fine-tuned adapters to {output_dir}...")
-    model.save_pretrained(output_dir)
-    processor.save_pretrained(output_dir)
-    logger.info("Done!")
+  # Start Training
+  logger.info(
+      "Starting %s training run...",
+      "Unsloth" if use_unsloth else "standard HF",
+  )
+  trainer_stats = trainer.train()
+  logger.info("Training completed. Stats: %s", trainer_stats)
+
+  # Save model/adapters
+  logger.info("Saving fine-tuned adapters to %s...", output_dir)
+  model.save_pretrained(output_dir)
+  processor.save_pretrained(output_dir)
+  logger.info("Done!")
+
+
+def main() -> None:
+  """Parses CLI arguments and runs SFT training."""
+  parser = argparse.ArgumentParser(
+      description="Fine-tune Gemma models using SFT QLoRA"
+  )
+  parser.add_argument(
+      "--model",
+      type=str,
+      default="google/gemma-4-E2B",
+      help="Model repo or local path",
+  )
+  parser.add_argument(
+      "--dataset",
+      type=str,
+      required=True,
+      help="Path to JSON/JSONL dataset file",
+  )
+  parser.add_argument(
+      "--test-size", type=float, default=0.2, help="dataset test split size"
+  )
+  parser.add_argument(
+      "--output", type=str, default="./sft_output", help="Output directory"
+  )
+  parser.add_argument(
+      "--max-len", type=int, default=2048, help="Max sequence length"
+  )
+  parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
+  parser.add_argument(
+      "--lora-alpha", type=int, default=32, help="LoRA alpha scaling"
+  )
+  parser.add_argument(
+      "--batch-size", type=int, default=2, help="Batch size per GPU"
+  )
+  parser.add_argument("--epochs", type=int, default=3, help="Training epochs")
+  parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
+  parser.add_argument(
+      "--force-hf",
+      action="store_true",
+      help="Force HF standard training even if Unsloth is installed",
+  )
+  parser.add_argument(
+      "--force-no-qlora", action="store_true", help="Disable QLoRA"
+  )
+
+  args = parser.parse_args()
+
+  use_unsloth = HAS_UNSLOTH and not args.force_hf
+  use_qlora = not args.force_no_qlora
+
+  train(
+      model_name=args.model,
+      dataset_path=args.dataset,
+      test_size=args.test_size,
+      output_dir=args.output,
+      max_length=args.max_len,
+      lora_r=args.lora_r,
+      lora_alpha=args.lora_alpha,
+      batch_size=args.batch_size,
+      epochs=args.epochs,
+      learning_rate=args.lr,
+      use_unsloth=use_unsloth,
+      use_qlora=use_qlora,
+  )
+
 
 if __name__ == "__main__":
-    import argparse
-    parser = argparse.ArgumentParser(description="Fine-tune Gemma models using SFT QLoRA")
-    parser.add_argument("--model", type=str, default="google/gemma-4-E2B", help="Model repo or local path")
-    parser.add_argument("--dataset", type=str, required=True, help="Path to JSON/JSONL dataset file")
-    parser.add_argument("--test-size", type=float, default=0.2, help="dataset test split size")
-    parser.add_argument("--output", type=str, default="./sft_output", help="Output directory")
-    parser.add_argument("--max-len", type=int, default=2048, help="Max sequence length")
-    parser.add_argument("--lora-r", type=int, default=16, help="LoRA rank")
-    parser.add_argument("--lora-alpha", type=int, default=32, help="LoRA alpha scaling")
-    parser.add_argument("--batch-size", type=int, default=2, help="Batch size per GPU")
-    parser.add_argument("--epochs", type=int, default=3, help="Training epochs")
-    parser.add_argument("--lr", type=float, default=2e-4, help="Learning rate")
-    parser.add_argument("--force-hf", action="store_true", help="Force HF standard training even if Unsloth is installed")
-    parser.add_argument("--force-no-qlora", action="store_true", help="Disable QLoRA")
-
-    args = parser.parse_args()
-
-    use_unsloth = HAS_UNSLOTH and not args.force_hf
-    use_qlora = not args.force_no_qlora
-
-    train(
-        model_name=args.model,
-        dataset_path=args.dataset,
-        test_size=args.test_size,
-        output_dir=args.output,
-        max_length=args.max_len,
-        lora_r=args.lora_r,
-        lora_alpha=args.lora_alpha,
-        batch_size=args.batch_size,
-        epochs=args.epochs,
-        learning_rate=args.lr,
-        use_unsloth=use_unsloth,
-        use_qlora=use_qlora,
-    )
+  main()

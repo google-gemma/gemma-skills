@@ -7,34 +7,48 @@ description: Trigger this skill when the user wants to train, fine-tune, or adap
 
 ## 1. Core Principles: Local Fine-Tuning Setup
 
-When training locally, memory efficiency and execution speed are huge. Always guide the user to follow these best practices:
+When training locally, memory efficiency and execution speed are huge. Always
+guide the user to follow these best practices:
 
-*   **Prioritize Unsloth**: For local single-GPU training, always recommend **Unsloth**. It supports Gemma 4 natively, uses up to 70% less memory, and is up to 2x faster than standard Hugging Face PEFT training.
-*   **Fall Back to TRL**: For multi-GPU environments (using DDP/FSDP) or when Unsloth is unavailable, use Hugging Face **TRL** (`SFTTrainer`, `DPOTrainer`) coupled with **PEFT** and **bitsandbytes** (for QLoRA).
-*   **Always use QLoRA (4-bit Quantization)**: Crucial for fitting Gemma models (like Gemma 4 12B/31B) into consumer VRAM.
-*   **Manage Context Window & Max Length**: Although Gemma 4 supports up to a 256K context window, recommend training with a context window of 2048 to 8192 tokens locally to prevent Out-Of-Memory (OOM) errors.
+*   **Prioritize Unsloth**: For local single-GPU training, always recommend
+    **Unsloth**. It supports Gemma 4 natively, uses up to 70% less memory, and
+    is up to 2x faster than standard Hugging Face PEFT training.
+*   **Fall Back to TRL**: For multi-GPU environments (using DDP/FSDP) or when
+    Unsloth is unavailable, use Hugging Face **TRL** (`SFTTrainer`,
+    `DPOTrainer`) coupled with **PEFT** and **bitsandbytes** (for QLoRA).
+*   **Always use QLoRA (4-bit Quantization)**: Crucial for fitting Gemma models
+    (like Gemma 4 12B/31B) into consumer VRAM.
+*   **Manage Context Window & Max Length**: Although Gemma 4 supports up to a
+    256K context window, recommend training with a context window of 2048 to
+    8192 tokens locally to prevent Out-Of-Memory (OOM) errors.
 
 ## 2. Choosing the Right Training Method
 
 Help the user choose the correct workflow based on their goal:
 
-- **Supervised Fine-Tuning (SFT)**: Teaching new domains, specialized task instructions, or custom output structures.
-  - Prerequisites: Raw text, instruction pairs, or chat logs.
-  - Output: Adaptor trained on prompt/completion pairs.
-- **Direct Preference Optimization (DPO)**: Aligning model style, behavior, tone, or safety with human preferences.
-  - Prerequisites: A previously SFT-trained Gemma model and preferred pairwise datasets.
-  - Output: Aligning model weights directly without a separate reward head.
-- **Reward Modeling (RM)**: Training a scoring system to evaluate response quality.
-  - Prerequisites: Binary preference pairwise datasets.
-  - Output: A classification-style reward head on top of Gemma.
+-   **Supervised Fine-Tuning (SFT)**: Teaching new domains, specialized task
+    instructions, or custom output structures.
+    -   Prerequisites: Raw text, instruction pairs, or chat logs.
+    -   Output: Adaptor trained on prompt/completion pairs.
+-   **Direct Preference Optimization (DPO)**: Aligning model style, behavior,
+    tone, or safety with human preferences.
+    -   Prerequisites: A previously SFT-trained Gemma model and preferred
+        pairwise datasets.
+    -   Output: Aligning model weights directly without a separate reward head.
+-   **Reward Modeling (RM)**: Training a scoring system to evaluate response
+    quality.
+    -   Prerequisites: Binary preference pairwise datasets.
+    -   Output: A classification-style reward head on top of Gemma.
 
 ## 3. Dataset Preparation & Validation
 
-Formatting issues are the #1 cause of poor training runs. Ensure you validate files using the utility script `[assets/dataset_prep.py]`.
+Formatting issues are the #1 cause of poor training runs. Ensure you validate
+files using the utility script `[assets/dataset_prep.py]`.
 
 ### Gemma Chat Prompt Format
 
 Ensure the dataset matches Gemma's official chat template:
+
 ```
 <|turn>system
 Your instruction here<turn|>
@@ -43,22 +57,47 @@ Your query here<turn|>
 <|turn>model
 Your response here<turn|>
 ```
-To avoid formatting drift, use the tokenizer's `apply_chat_template` during dataset tokenization.
+
+To avoid formatting drift, use the tokenizer's `apply_chat_template` during
+dataset tokenization.
 
 ### Format Specifications
 
-*   **SFT (Supervised Fine-Tuning)**:
-    Format as a list of conversation turns.
-    ```json
-    {
-      "messages": [
-        {"role": "user", "content": "Tell me a joke."},
-        {"role": "model", "content": "Why did the computer go to the doctor? It had a virus!"}
-      ]
-    }
-    ```
-*   **DPO (Direct Preference Optimization)**:
-    Requires pairwise samples containing a prompt, a chosen (better) response, and a rejected (worse) response.
+*   **SFT (Supervised Fine-Tuning)**: Supports two dataset structures:
+
+    *   **Conversational (`messages`)**: Format as a list of conversation turns.
+
+        ```json
+        {
+          "messages": [
+            {"role": "user", "content": "Tell me a joke."},
+            {"role": "assistant", "content": "Why did the computer go to the doctor? It had a virus!"}
+          ]
+        }
+        ```
+
+    *   **Prompt-Completion (`prompt` and `completion`)**: Separate the input
+        context from the target response. With the prompt-completion format,
+        `trl` (`SFTTrainer`) also computes the loss on the `completion` only
+        (`completion_only_loss=True` by default), so the model learns to
+        generate the target output (e.g., write a SQL query) rather than to
+        repeat the prompt.
+
+        ```json
+        {
+          "prompt": [
+            {"role": "system", "content": "You are an expert SQL assistant."},
+            {"role": "user", "content": "Write a query to count active users."}
+          ],
+          "completion": [
+            {"role": "assistant", "content": "SELECT COUNT(*) FROM users WHERE active = 1;"}
+          ]
+        }
+        ```
+*   **DPO (Direct Preference Optimization)**: Requires pairwise samples
+    containing a prompt, a chosen (better) response, and a rejected (worse)
+    response.
+
     ```json
     {
       "prompt": "Write a python function to compute factorial.",
@@ -66,25 +105,34 @@ To avoid formatting drift, use the tokenizer's `apply_chat_template` during data
       "rejected": "factorial is computed using recursion or loops. Just import math."
     }
     ```
-*   **Reward Modeling**:
-    Format identically to DPO datasets. The `RewardTrainer` evaluates the pair and learns to output a higher logit score for `chosen` than for `rejected`.
+*   **Reward Modeling**: Format identically to DPO datasets. The `RewardTrainer`
+    evaluates the pair and learns to output a higher logit score for `chosen`
+    than for `rejected`.
 
 ### Dataset Distillation & Synthesis (Teacher-Student)
 
-Local knowledge distillation allows you to train small, lightweight student models (such as **Gemma 4 E2B**) using high-quality dataset outputs generated by larger, highly capable teacher models (such as **Gemma 4 31B** or **Gemma 4 26B A4B**).
+Local knowledge distillation allows you to train small, lightweight student
+models (such as **Gemma 4 E2B**) using high-quality dataset outputs generated by
+larger, highly capable teacher models (such as **Gemma 4 31B** or **Gemma 4 26B
+A4B**).
 
-Use the `[assets/distill_dataset.py]` utility script to generate fine-tuning datasets on your local machine.
+Use the `[assets/distill_dataset.py]` utility script to generate fine-tuning
+datasets on your local machine.
 
 ## 4. Fine-Tuning Workflows
 
 ### Supervised Fine-Tuning (SFT)
 
-Use the `[assets/sft_train.py]` asset to launch a local QLoRA fine-tuning session.
+Use the `[assets/sft_train.py]` asset to launch a local QLoRA fine-tuning
+session.
 
 *   **LoRA Hyperparameters**:
-    *   Rank (`r`): `16` or `32` (Higher rank captures complex behaviors but consumes more memory).
-    *   Alpha (`lora_alpha`): `32` or `64` (Rule of thumb: `lora_alpha = 2 * r`).
-    *   Dropout (`lora_dropout`): `0.05` or `0.1` (Forcing the model to learn more robust features rather than relying on specific paths).
+    *   Rank (`r`): `16` or `32` (Higher rank captures complex behaviors but
+        consumes more memory).
+    *   Alpha (`lora_alpha`): `32` or `64` (Rule of thumb:
+        `lora_alpha = 2 * r`).
+    *   Dropout (`lora_dropout`): `0.05` or `0.1` (Forcing the model to learn
+        more robust features rather than relying on specific paths).
     *   Target Modules: Use PEFT's Gemma 4 defaults scope to the **LM layers**.
     *   Learning Rate: `2e-4` for QLoRA; `2e-5` for full fine-tuning.
 
@@ -93,14 +141,19 @@ Use the `[assets/sft_train.py]` asset to launch a local QLoRA fine-tuning sessio
 Use the `[assets/dpo_train.py]` template to execute alignment.
 
 *   **Rules for DPO**:
-    *   **Always** perform SFT on the base model using your instruction format before running DPO. Running DPO directly on an out-of-domain base model usually fails or degrades output formatting.
-    *   Set `beta` (DPO temperature parameter) to `0.1`. Values between `0.1` and `0.5` control how strictly the model adheres to the reference policy.
+    *   **Always** perform SFT on the base model using your instruction format
+        before running DPO. Running DPO directly on an out-of-domain base model
+        usually fails or degrades output formatting.
+    *   Set `beta` (DPO temperature parameter) to `0.1`. Values between `0.1`
+        and `0.5` control how strictly the model adheres to the reference
+        policy.
 
 ### Reward Modeling (RM)
 
 Use the `[assets/reward_train.py]` template to train an evaluation model.
 
-*   Initializes the model with a sequence classification head (`AutoModelForSequenceClassification` with `num_labels=1`).
+*   Initializes the model with a sequence classification head
+    (`AutoModelForSequenceClassification` with `num_labels=1`).
 *   Trains the single scalar reward value to distinguish preferred responses.
 
 ## 5. Multimodal Fine-Tuning (Vision & Audio)
@@ -111,7 +164,9 @@ Gemma 4 models are natively multimodal. To fine-tune them on images or audio:
 
 *   Use Gemma 4 E2B/E4B/12B/26B/31B models.
 *   Use standard Hugging Face `SFTTrainer` with a custom visual data collator.
-*   Prepare your dataset containing local image paths or PIL images, alongside corresponding conversation instructions:
+*   Prepare your dataset containing local image paths or PIL images, alongside
+    corresponding conversation instructions:
+
     ```json
     {
       "messages": [
@@ -130,8 +185,11 @@ Gemma 4 models are natively multimodal. To fine-tune them on images or audio:
 ### Audio SFT
 
 *   Use Gemma 4 E2B/E4B/12B models.
-*   Feed raw audio arrays (sampled at 16kHz) through the model processor to produce `input_features`.
-*   Maintain conversational formatting, replacing `image` type with `audio` type in the message format.
+*   Feed raw audio arrays (sampled at 16kHz) through the model processor to
+    produce `input_features`.
+*   Maintain conversational formatting, replacing `image` type with `audio` type
+    in the message format.
+
     ```json
     {
       "messages": [
@@ -154,14 +212,22 @@ Once your LoRA training is finished, you can convert your model to GGUF format.
 
 #### Option 1: Native Export via Unsloth (Recommended)
 
-If you trained your model using **Unsloth**, you can export directly to GGUF natively. This automatically handles merging and quantization.
+If you trained your model using **Unsloth**, you can export directly to GGUF
+natively. This automatically handles merging and quantization.
 
-Fetch [Saving to GGUF](https://unsloth.ai/docs/basics/inference-and-deployment/saving-to-gguf.md) for the best practice.
+Fetch
+[Saving to GGUF](https://unsloth.ai/docs/basics/inference-and-deployment/saving-to-gguf.md)
+for the best practice.
 
 #### Option 2: Manual Conversion with llama.cpp
 
-If you did not use Unsloth, you can convert your merged Hugging Face model directory manually using [llama.cpp](https://github.com/ggml-org/llama.cpp).
+If you did not use Unsloth, you can convert your merged Hugging Face model
+directory manually using [llama.cpp](https://github.com/ggml-org/llama.cpp).
 
 ### On-Device Deployment with LiteRT-LM (.litertlm)
 
-**LiteRT-LM** is optimized for running models like **Gemma 4 E2B** and **Gemma 4 E4B** on mobile, web, and IoT hardware with hardware acceleration (CPU, GPU, NPU). Fetch [LiteRT-LM guide](https://developers.google.com/edge/litert-lm/models/gemma-4.md.txt) for the best practice.
+**LiteRT-LM** is optimized for running models like **Gemma 4 E2B** and **Gemma 4
+E4B** on mobile, web, and IoT hardware with hardware acceleration (CPU, GPU,
+NPU). Fetch
+[LiteRT-LM guide](https://developers.google.com/edge/litert-lm/models/gemma-4.md.txt)
+for the best practice.
