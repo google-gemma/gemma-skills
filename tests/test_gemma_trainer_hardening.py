@@ -52,14 +52,16 @@ class DatasetPrepTests(unittest.TestCase):
         cls.module = load_asset("dataset_prep")
 
     class Tokenizer:
-        def apply_chat_template(self, messages, tokenize, add_generation_prompt=False):
+        def apply_chat_template(self, messages, tokenize, add_generation_prompt=False, return_dict=True):
             if not tokenize:
                 raise AssertionError("validation must tokenize the template directly")
             tokens = [10, 11]
-            if add_generation_prompt:
-                return tokens
-            response = messages[-1]["content"]
-            return tokens + list(range(len(response)))
+            if not add_generation_prompt:
+                tokens = tokens + list(range(len(messages[-1]["content"])))
+            if return_dict:
+                # Newer transformers return a BatchEncoding unless told otherwise.
+                return {"input_ids": tokens, "attention_mask": [1] * len(tokens)}
+            return tokens
 
     def run_validation(self, dataset, **overrides):
         values = {

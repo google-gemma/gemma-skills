@@ -141,9 +141,9 @@ def validate_dpo_tokenization(item: Dict[str, Any], idx: int, tokenizer: Any) ->
         # 2. Apply the tokenizer's template directly. Rendering and then calling encode()
         # can add special tokens twice and create a false boundary mismatch.
         prompt_ids = tokenizer.apply_chat_template(
-            prompt_chat, tokenize=True, add_generation_prompt=True)
-        chosen_ids = tokenizer.apply_chat_template(chosen_chat, tokenize=True)
-        rejected_ids = tokenizer.apply_chat_template(rejected_chat, tokenize=True)
+            prompt_chat, tokenize=True, return_dict=False, add_generation_prompt=True)
+        chosen_ids = tokenizer.apply_chat_template(chosen_chat, tokenize=True, return_dict=False)
+        rejected_ids = tokenizer.apply_chat_template(rejected_chat, tokenize=True, return_dict=False)
 
         prompt_len = len(prompt_ids)
 
@@ -219,7 +219,7 @@ def run_validation(file_path: str, task_type: str, max_seq_length: int = 2048, t
             if is_valid:
                 try:
                     token_lengths.append(len(tokenizer.apply_chat_template(
-                        item["messages"], tokenize=True)))
+                        item["messages"], tokenize=True, return_dict=False)))
                 except Exception as e:
                     logger.error(
                         f"Item {i}: Template validation failed with {type(e).__name__}; "
@@ -243,7 +243,7 @@ def run_validation(file_path: str, task_type: str, max_seq_length: int = 2048, t
                                 {"role": "user", "content": item["prompt"]},
                                 {"role": "assistant", "content": item[response_key]},
                             ],
-                            tokenize=True,
+                            tokenize=True, return_dict=False,
                         )
                         token_lengths.append(len(tokens))
                 except Exception as e:
