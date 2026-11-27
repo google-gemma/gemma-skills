@@ -55,6 +55,42 @@ def supports_bf16() -> bool:
   return False
 
 
+_MULTIMODAL_EXCLUDE_PATTERN = r"model\.(vision_tower|audio_tower)\..*"
+_MOE_EXCLUDE_PATTERN = r"(model\.(vision_tower|audio_tower)\..*|.*router.*)"
+_MOE_TARGET_MODULES = [
+    "q_proj",
+    "k_proj",
+    "v_proj",
+    "o_proj",
+    "gate_proj",
+    "up_proj",
+    "down_proj",
+]
+_MOE_TARGET_PARAMETERS = [
+    "experts.gate_up_proj",
+    "experts.down_proj",
+]
+
+
+def _is_moe_model(model_name: str, model: Any = None) -> bool:
+  """Detects whether the target Gemma 4 checkpoint uses a MoE architecture."""
+  normalized_name = model_name.lower()
+  if "26b-a4b" in normalized_name or "26b_a4b" in normalized_name:
+    return True
+  if model is not None:
+    config = getattr(model, "config", None)
+    text_config = getattr(config, "text_config", config)
+    for cfg in (text_config, config):
+      if cfg is None:
+        continue
+      if getattr(cfg, "enable_moe_block", False):
+        return True
+      num_experts = getattr(cfg, "num_experts", None)
+      if isinstance(num_experts, int) and num_experts > 1:
+        return True
+  return False
+
+
 def load_model_and_processor(
     model_name: str,
     max_length: int,
@@ -67,6 +103,7 @@ def load_model_and_processor(
   # Determine reference IT model for processor fallback if base PT model is used
   processor_model_id = model_name if "-it" in model_name else f"{model_name}-it"
   fallback_model_id = "google/gemma-4-E2B-it"
+  is_moe = _is_moe_model(model_name)
 
   if use_unsloth:
     if not HAS_UNSLOTH:
@@ -75,8 +112,14 @@ def load_model_and_processor(
     unsloth = importlib.import_module("unsloth")
     chat_templates = importlib.import_module("unsloth.chat_templates")
 
+    loader_cls = (
+        getattr(unsloth, "FastVisionModel", unsloth.FastModel)
+        if is_moe
+        else unsloth.FastModel
+    )
+
     logger.info("Loading %s with Unsloth...", model_name)
-    model, processor = unsloth.FastModel.from_pretrained(
+    model, processor = loader_cls.from_pretrained(
         model_name=model_name,
         max_seq_length=max_length,
         dtype=None,  # Auto-detection
@@ -90,7 +133,7 @@ def load_model_and_processor(
     )
 
     logger.info("Configuring LoRA adapters...")
-    model = unsloth.FastModel.get_peft_model(
+    model = loader_cls.get_peft_model(
         model,
         finetune_vision_layers=True,  # False if not finetuning vision layers
         # False if not finetuning language layers
@@ -125,7 +168,19 @@ def load_model_and_processor(
         device_map="auto",  # Let torch decide how to load the model
     )
 
-    if use_qlora:
+    effective_use_qlora = use_qlora
+    if use_qlora and is_moe:
+      logger.warning(
+          "BitsAndBytesConfig skips fused 3D MoE expert tensors (~45.7 GB in"
+          " bfloat16) on %s. Loading in %s for HF PEFT instead; use Unsloth"
+          " FastVisionModel(load_in_4bit=True) for 4-bit training on 24-40 GB"
+          " GPUs.",
+          model_name,
+          torch_dtype,
+      )
+      effective_use_qlora = False
+
+    if effective_use_qlora:
       model_kwargs["quantization_config"] = transformers.BitsAndBytesConfig(
           load_in_4bit=True,
           bnb_4bit_use_double_quant=True,
@@ -161,18 +216,34 @@ def load_model_and_processor(
     model = auto_model_cls.from_pretrained(model_name, **model_kwargs)
 
     # Prepare model for QLoRA training
-    if use_qlora:
+    if effective_use_qlora:
       model = peft.prepare_model_for_kbit_training(model)
 
+    # Re-check MoE architecture from loaded config (handles local checkpoints)
+    is_moe = _is_moe_model(model_name, model)
+
     # Configure LoRA
-    peft_config = peft.LoraConfig(
-        r=lora_r,
-        lora_alpha=lora_alpha,
-        lora_dropout=0.05,
-        bias="none",
-        task_type="CAUSAL_LM",
-        # no target_modules — PEFT's Gemma 4 defaults scope to the LM layers
-    )
+    if is_moe:
+      peft_config = peft.LoraConfig(
+          r=lora_r,
+          lora_alpha=lora_alpha,
+          lora_dropout=0.05,
+          bias="none",
+          target_modules=_MOE_TARGET_MODULES,
+          target_parameters=_MOE_TARGET_PARAMETERS,
+          exclude_modules=_MOE_EXCLUDE_PATTERN,
+          task_type="CAUSAL_LM",
+      )
+    else:
+      peft_config = peft.LoraConfig(
+          r=lora_r,
+          lora_alpha=lora_alpha,
+          lora_dropout=0.05,
+          bias="none",
+          exclude_modules=_MULTIMODAL_EXCLUDE_PATTERN,
+          task_type="CAUSAL_LM",
+          # no target_modules — PEFT's Gemma 4 defaults scope to the LM layers
+      )
     model = peft.get_peft_model(model, peft_config)
 
   return model, processor

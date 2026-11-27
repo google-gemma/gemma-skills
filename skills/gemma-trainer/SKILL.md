@@ -108,8 +108,8 @@ Your instruction here<turn|>
 <|turn>user
 Your query here<turn|>
 <|turn>model
-<|thought>
-Optional reasoning trace<thought|>Your response here<turn|>
+<|channel>thought
+Optional reasoning trace<channel|>Your response here<turn|>
 ```
 
 ### Format Specifications
